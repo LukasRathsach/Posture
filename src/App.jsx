@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   FEE_PER_TRADE, accent, accentDim, green, red, sans,
   fmtPct, fmtColor, netPnl, tradeNet, emptyTrade,
-  checkTrade, sessionViolations, importRawTrades, mergeImportedTrades, THEME
+  checkTrade, sessionViolations, mergeImportedTrades, THEME
 } from "./utils";
 import {
   getCurrentUser,
@@ -172,11 +172,6 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [addTradeOpen, setAddTradeOpen] = useState(false);
   const [tradeForm, setTradeForm] = useState(emptyTrade());
-  const [importText, setImportText] = useState("");
-  const [importGood, setImportGood] = useState("");
-  const [importBad, setImportBad] = useState("");
-  const [importMsg, setImportMsg] = useState("");
-  const [importOpen, setImportOpen] = useState(false);
   const [calendarUnit, setCalendarUnit] = useState("usd");
   const [calendarHover, setCalendarHover] = useState(null);
   const [highlightHover, setHighlightHover] = useState(null);
@@ -188,7 +183,6 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
   const [authForm, setAuthForm] = useState({ fullName: "", email: "", password: "", confirmPassword: "" });
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const initialized = useRef(false);
   const saveTimer = useRef(null);
   const lastSyncedTradeKey = useRef("");
@@ -325,13 +319,12 @@ export default function App() {
   useEffect(() => {
     const h = e => {
       if (e.key === "Escape") {
-        if (importOpen) setImportOpen(false);
-        else if (modal) closeModal();
+        if (modal) closeModal();
       }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [modal, importOpen]);
+  }, [modal]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const allTrades = sessions.flatMap(s => s.tradeList || []);
@@ -550,17 +543,6 @@ export default function App() {
     }));
   }
 
-  function handleImport() {
-    const result = importRawTrades(importText, setSessions, importGood.trim(), importBad.trim());
-    if (result === false) {
-      setImportMsg("Invalid format - paste your JSON from MockApe.");
-    } else {
-      setImportMsg(`✓ ${result} session(s) imported`);
-      setImportText(""); setImportGood(""); setImportBad("");
-      setTimeout(() => { setImportMsg(""); setImportOpen(false); }, 2000);
-    }
-  }
-
   // ── Style primitives ───────────────────────────────────────────────────────
   const inp = {
     fontSize: 14, padding: "11px 13px", borderRadius: 6,
@@ -682,13 +664,6 @@ export default function App() {
       <span style={{ fontSize: 14, color: tk.textDim, width: 14, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>⇅</span>
       <span style={{ display: "inline-block", minWidth: 28, textAlign: "left" }}>{calendarUnit === "usd" ? "USD" : "SOL"}</span>
     </button>
-  );
-  const importIcon = (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
-      <path d="M6 1.5V7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      <path d="M3.75 5.4L6 7.65L8.25 5.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M2 9.5H10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
   );
   const labelStyle = {
     fontSize: 10,
@@ -1355,51 +1330,6 @@ export default function App() {
     </aside>
   );
 
-  // ── Import modal ───────────────────────────────────────────────────────────
-  const canImport = importText.trim() && importGood.trim() && importBad.trim();
-  const importModal = importOpen ? (
-    <div onClick={() => setImportOpen(false)} style={{ position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.62)" : "rgba(31,35,40,0.28)", backdropFilter: "blur(8px)", zIndex: 500, display: "flex", alignItems: isDesktop ? "center" : "flex-end", justifyContent: "center", padding: isDesktop ? 24 : 0 }}>
-      <div onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: isDesktop ? 20 : "22px 22px 0 0", width: "100%", maxWidth: 540, maxHeight: isDesktop ? "85vh" : "90vh", overflowY: "auto", padding: "24px 22px 36px", fontFamily: sans, animation: isDesktop ? "sheetUp 0.2s ease" : "sheetUp 0.22s ease" }}>
-        {!isDesktop && <div style={{ width: 32, height: 3, borderRadius: 2, background: `${accent}44`, margin: "0 auto 18px" }} />}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <span style={{ fontSize: 18, fontWeight: 760, color: tk.text }}>Import session</span>
-          <button onClick={() => setImportOpen(false)} style={{ ...actionButton, fontSize: 13, color: tk.textMid, padding: "6px 14px" }}>Close</button>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div>
-            <label style={{ fontSize: 11, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.09em", display: "block", marginBottom: 5, fontWeight: 500 }}>JSON</label>
-            <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder='[{"tokenName":"LANI","pnlSol":0.507,...}]' rows={4} style={{ ...inp, resize: "vertical", lineHeight: 1.5, fontSize: 12 }} />
-          </div>
-
-          <div style={{ height: 1, background: tk.border }} />
-
-          <div>
-            <label style={{ fontSize: 11, color: `${green}bb`, textTransform: "uppercase", letterSpacing: "0.09em", display: "block", marginBottom: 5, fontWeight: 500 }}>What did you do well? *</label>
-            <textarea value={importGood} onChange={e => setImportGood(e.target.value)} placeholder="E.g. respected stop loss consistently..." rows={2} style={{ ...inp, resize: "vertical", lineHeight: 1.55 }} />
-          </div>
-
-          <div>
-            <label style={{ fontSize: 11, color: `${red}bb`, textTransform: "uppercase", letterSpacing: "0.09em", display: "block", marginBottom: 5, fontWeight: 500 }}>What could be better? *</label>
-            <textarea value={importBad} onChange={e => setImportBad(e.target.value)} placeholder="E.g. entered too early..." rows={2} style={{ ...inp, resize: "vertical", lineHeight: 1.55 }} />
-          </div>
-
-          <button onClick={handleImport} disabled={!canImport} style={{
-            padding: "12px", fontSize: 14, fontWeight: 600, borderRadius: 12,
-            border: `1px solid ${canImport ? accent + "44" : tk.border}`,
-            background: canImport ? (dark ? "rgba(16,163,127,0.13)" : "rgba(16,163,127,0.10)") : "transparent",
-            color: canImport ? accent : tk.textDim,
-            cursor: canImport ? "pointer" : "not-allowed",
-            fontFamily: sans, transition: "all 0.15s",
-          }}>
-            {canImport ? "Import" : "Fill in both reflection fields"}
-          </button>
-          {importMsg && <div style={{ fontSize: 13, color: green, textAlign: "center", fontFamily: sans }}>{importMsg}</div>}
-        </div>
-      </div>
-    </div>
-  ) : null;
-
   const authScreen = (
     <div style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: sans, display: "grid", placeItems: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 460, ...panel, padding: 24, borderRadius: 16 }}>
@@ -1597,18 +1527,7 @@ export default function App() {
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", height: "100%", alignItems: "stretch" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, minWidth: 0, padding: `0 ${sectionPad}px` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                <div
-                  style={{ position: "relative" }}
-                  onMouseEnter={() => setAccountMenuOpen(true)}
-                  onMouseLeave={() => setAccountMenuOpen(false)}
-                >
-                  <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "default" }}>{currentUserLabel}</span>
-                  {accountMenuOpen && !isLocalMode && (
-                    <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, background: dark ? "#18191f" : "#fff", border: `1px solid ${tk.border}`, borderRadius: 8, padding: "4px", zIndex: 200, boxShadow: "0 4px 16px rgba(0,0,0,0.18)", minWidth: 110 }}>
-                      <button onClick={handleSignOut} style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "7px 10px", fontSize: 12, color: tk.textMid, cursor: "pointer", borderRadius: 5, fontFamily: sans }}>Sign out</button>
-                    </div>
-                  )}
-                </div>
+                <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "default" }}>{currentUserLabel}</span>
                 {streakBadge}
               </div>
               {currencyToggle}
@@ -1621,10 +1540,7 @@ export default function App() {
                 </div>
               ) : <div />}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button onClick={() => setImportOpen(true)} style={{ ...headerButton, display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  {importIcon}
-                  <span>Import</span>
-                </button>
+                {!isLocalMode && <button onClick={handleSignOut} style={{ ...headerButton }}>Sign out</button>}
               </div>
             </div>
           </div>
@@ -1632,18 +1548,7 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, height: "100%" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, paddingLeft: 18 }}>
-                <div
-                  style={{ position: "relative" }}
-                  onMouseEnter={() => setAccountMenuOpen(true)}
-                  onMouseLeave={() => setAccountMenuOpen(false)}
-                >
-                  <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "default" }}>{currentUserLabel}</span>
-                  {accountMenuOpen && !isLocalMode && (
-                    <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, background: dark ? "#18191f" : "#fff", border: `1px solid ${tk.border}`, borderRadius: 8, padding: "4px", zIndex: 200, boxShadow: "0 4px 16px rgba(0,0,0,0.18)", minWidth: 110 }}>
-                      <button onClick={handleSignOut} style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "7px 10px", fontSize: 12, color: tk.textMid, cursor: "pointer", borderRadius: 5, fontFamily: sans }}>Sign out</button>
-                    </div>
-                  )}
-                </div>
+                <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "default" }}>{currentUserLabel}</span>
                 {streakBadge}
               </div>
             </div>
@@ -1658,11 +1563,12 @@ export default function App() {
                 </>
               )}
               {currencyToggle}
-              <div style={{ width: 1, height: 22, background: tk.border }} />
-              <button onClick={() => setImportOpen(true)} style={{ ...headerButton, display: "inline-flex", alignItems: "center", gap: 8 }}>
-                {importIcon}
-                <span>Import</span>
-              </button>
+              {!isLocalMode && (
+                <>
+                  <div style={{ width: 1, height: 22, background: tk.border }} />
+                  <button onClick={handleSignOut} style={{ ...headerButton }}>Sign out</button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1736,7 +1642,6 @@ export default function App() {
             </div>
           </>
         )}
-        {importModal}
       </div>
     );
   }

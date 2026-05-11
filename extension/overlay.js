@@ -10,7 +10,7 @@
   const OVERLAY_POSITION_KEY = "td_overlay_position";
   const OVERLAY_COMPACT_KEY = "td_overlay_compact";
   const OPEN_TRADE_NOTE_PREFIX = "__TD_OPEN__";
-  const BUY_PRESETS = [0.05, 0.1, 0.2, 0.4, 1, 2, 4, 5];
+  const BUY_PRESETS = [0.1, 0.2, 0.4, 1];
   const SELL_PRESETS = [10, 25, 50, 100];
 
   const state = {
@@ -782,7 +782,9 @@
               <div class="td-overlay-sell-stack">
                 <div class="td-overlay-sell-grid">
                   ${SELL_PRESETS.map(percent => `<button class="td-overlay-pill td-overlay-pill-sell" type="button" data-sell-percent="${percent}" ${currentPosition ? "" : "disabled"}>${percent}%</button>`).join("")}
-                  <button class="td-overlay-pill td-overlay-pill-sell" type="button" data-sell-init ${currentPosition ? "" : "disabled"}>Sell init</button>
+                </div>
+                <div class="td-overlay-sell-sub">
+                  <button class="td-overlay-sell-sub-btn" type="button" data-sell-init ${currentPosition ? "" : "disabled"}>Sell init.</button>
                 </div>
               </div>
             </div>

@@ -185,7 +185,7 @@
 
 .td-overlay-preset-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
 }
 
@@ -311,9 +311,37 @@
 
 .td-overlay-sell-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   margin-top: 0;
+}
+
+.td-overlay-sell-sub {
+  display: flex;
+  align-items: center;
+  padding: 4px 2px 0;
+}
+
+.td-overlay-sell-sub-btn {
+  font: inherit;
+  font-size: 11px;
+  color: #d64545;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.7;
+  letter-spacing: 0.01em;
+}
+
+.td-overlay-sell-sub-btn:not(:disabled):hover {
+  opacity: 1;
+}
+
+.td-overlay-sell-sub-btn:disabled {
+  color: #6f7682;
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .td-overlay-sell-grid .td-overlay-pill {
