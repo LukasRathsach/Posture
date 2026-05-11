@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trading Dashboard Sync</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Trading Dashboard</div>
+          <h1>Sync Control</h1>
+        </div>
+        <button id="open-dashboard" class="ghost compact" type="button">Open</button>
+      </div>
+
+      <div id="setup-state" class="panel hidden">
+        <div class="panel-title">Setup needed</div>
+        <p>Add `extension/config.js` before using the extension.</p>
+      </div>
+
+      <div id="signed-out-state" class="panel hidden">
+        <div class="panel-title">Sign in</div>
+        <p>Use the same login as your trading dashboard.</p>
+        <form id="auth-form" class="stack">
+          <label class="field">
+            <span>Email</span>
+            <input id="email" type="email" placeholder="you@example.com" required />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input id="password" type="password" placeholder="Password" required />
+          </label>
+          <button id="auth-submit" class="primary" type="submit">Sign in</button>
+        </form>
+        <div id="auth-message" class="message hidden"></div>
+      </div>
+
+      <div id="signed-in-state" class="panel hidden">
+        <div class="status-row">
+          <div>
+            <div class="panel-title">Sync active</div>
+            <div id="user-email" class="muted"></div>
+          </div>
+          <span class="status-dot"></span>
+        </div>
+
+        <div class="sync-card">
+          <div>
+            <div class="summary-label">Axiom overlay</div>
+            <div id="sync-status" class="sync-value">Enabled</div>
+          </div>
+          <label class="switch">
+            <input id="sync-toggle" type="checkbox" />
+            <span class="switch-track"></span>
+          </label>
+        </div>
+
+        <div class="sync-card">
+          <div>
+            <div class="summary-label">Force overlay</div>
+            <div id="force-status" class="sync-value">Off</div>
+          </div>
+          <label class="switch">
+            <input id="force-toggle" type="checkbox" />
+            <span class="switch-track"></span>
+          </label>
+        </div>
+
+        <div class="note">
+          Force overlay is useful when Axiom detection misses the current page.
+        </div>
+
+        <div class="stack actions">
+          <button id="reset-overlay" class="primary" type="button">Reset overlay position</button>
+          <button id="sign-out" class="ghost wide" type="button">Sign out</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./config.js"></script>
+    <script src="./popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,72 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { min-height: 100%; }
+html {
+  background: #06070a;
+}
+body {
+  background: #06070a;
+  color: #f4f4f5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+button, input, textarea { font: inherit; }
+button { transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, filter 160ms ease; }
+button,
+.clickable-text,
+.streak-badge,
+.calendar-session-cell {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.clickable-text {
+  transition: color 160ms ease, opacity 160ms ease, filter 160ms ease;
+}
+.clickable-text:hover {
+  color: #eef1f8 !important;
+  filter: brightness(1.06);
+}
+.currency-toggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.streak-badge {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, color 160ms ease, filter 160ms ease;
+}
+.calendar-session-cell,
+.calendar-session-day,
+.calendar-session-value,
+.calendar-session-count {
+  transition: background-color 160ms ease, color 160ms ease, filter 160ms ease, box-shadow 160ms ease, outline-color 160ms ease;
+}
+.calendar-session-cell:hover {
+  filter: brightness(1.06) saturate(1.04);
+}
+.calendar-session-cell:hover .calendar-session-day,
+.calendar-session-cell:hover .calendar-session-count {
+  color: rgba(235, 238, 247, 0.86) !important;
+}
+.calendar-session-cell:hover .calendar-session-value {
+  filter: brightness(1.12);
+}
+@media (min-width: 900px) {
+  .calendar-session-cell:hover {
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  }
+}
+input:focus, textarea:focus {
+  border-color: #10a37f !important;
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.12);
+}
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #b9bdb8; border-radius: 4px; }
+select option { background: #1d1d23; color: #eeeef2; }
+@keyframes slideInRight {
+  from { transform: translateX(20px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes sheetUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
