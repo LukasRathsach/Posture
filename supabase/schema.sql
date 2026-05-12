@@ -185,7 +185,7 @@ as $$
 declare
   v_code text;
 begin
-  if (select email from auth.users where id = auth.uid()) != 'lrl@dsfwine.dk' then
+  if (select email from auth.users where id = auth.uid()) != 'lukas@rathsach.com' then
     raise exception 'Not authorized';
   end if;
   v_code := upper(substring(encode(gen_random_bytes(4), 'hex') for 8));
@@ -219,7 +219,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if (select email from auth.users where id = auth.uid()) != 'lrl@dsfwine.dk' then
+  if (select email from auth.users where id = auth.uid()) != 'lukas@rathsach.com' then
     raise exception 'Not authorized';
   end if;
   return query

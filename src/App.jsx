@@ -196,7 +196,7 @@ export default function App() {
   const saveTimer = useRef(null);
   const lastSyncedTradeKey = useRef("");
   const isLocalMode = !hasSupabaseConfig;
-  const isAdmin = authUser?.email === "lrl@dsfwine.dk";
+  const isAdmin = authUser?.email === "lukas@rathsach.com";
   const now = new Date();
   const isCurrentMonth = currentMonth.y === now.getFullYear() && currentMonth.m === now.getMonth();
 
