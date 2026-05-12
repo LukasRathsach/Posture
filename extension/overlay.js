@@ -1,8 +1,8 @@
 (function () {
-  if (window.__TRADING_DASHBOARD_AXIOM_OVERLAY__) return;
-  window.__TRADING_DASHBOARD_AXIOM_OVERLAY__ = true;
+  if (window.__POSTURE_AXIOM_OVERLAY__) return;
+  window.__POSTURE_AXIOM_OVERLAY__ = true;
 
-  const config = window.TRADING_DASHBOARD_EXTENSION_CONFIG;
+  const config = window.POSTURE_EXTENSION_CONFIG;
   const storage = chrome.storage.local;
   const OPEN_POSITIONS_KEY = "td_open_positions";
   const EXTENSION_ENABLED_KEY = "td_extension_enabled";

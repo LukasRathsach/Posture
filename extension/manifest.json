@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Trading Dashboard Sync",
-  "description": "Quick sign-in for the same Trading Dashboard account you use on the web app.",
+  "name": "Posture",
+  "description": "Trade with discipline. Overlay for Axiom that syncs with your Posture account.",
   "version": "0.1.0",
   "permissions": [
     "storage",
@@ -27,7 +27,7 @@
     }
   ],
   "action": {
-    "default_title": "Trading Dashboard Sync",
+    "default_title": "Posture",
     "default_popup": "popup.html"
   }
 }

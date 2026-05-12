@@ -1358,7 +1358,7 @@ export default function App() {
   const authScreen = (
     <div style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: sans, display: "grid", placeItems: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 460, ...panel, padding: 24, borderRadius: 16 }}>
-        <div style={{ fontSize: 11, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Trading Dashboard</div>
+        <div style={{ fontSize: 11, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Posture</div>
         <div style={{ marginTop: 10, fontSize: 28, fontWeight: 800, lineHeight: 1.1 }}>
           {!hasSupabaseConfig ? "Connect Supabase" : authReady ? (
             authMode === "sign-up"

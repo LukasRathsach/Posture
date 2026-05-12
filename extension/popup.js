@@ -1,5 +1,5 @@
 (function () {
-  const config = window.TRADING_DASHBOARD_EXTENSION_CONFIG;
+  const config = window.POSTURE_EXTENSION_CONFIG;
   const storage = chrome.storage.local;
   const EXTENSION_ENABLED_KEY = "td_extension_enabled";
   const FORCE_OVERLAY_KEY = "td_force_overlay";
