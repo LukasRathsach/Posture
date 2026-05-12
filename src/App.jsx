@@ -182,7 +182,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState("loading");
   const [authUser, setAuthUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
-  const [authMode, setAuthMode] = useState("sign-in");
+  const [authMode, setAuthMode] = useState("sign-up");
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
@@ -1355,184 +1355,151 @@ export default function App() {
     </aside>
   );
 
+  const switchMode = (mode) => { setAuthMode(mode); setAuthError(""); setAuthNotice(""); };
+
   const authScreen = (
     <div style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: sans, display: "grid", placeItems: "center", padding: 20 }}>
-      <div style={{ width: "100%", maxWidth: 460, ...panel, padding: 24, borderRadius: 16 }}>
-        <div style={{ fontSize: 11, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Posture</div>
-        <div style={{ marginTop: 10, fontSize: 28, fontWeight: 800, lineHeight: 1.1 }}>
-          {!hasSupabaseConfig ? "Connect Supabase" : authReady ? (
-            authMode === "sign-up"
-              ? "Create your account"
-              : authMode === "forgot-password"
-              ? "Reset your password"
-              : authMode === "reset-password"
-              ? "Choose a new password"
-              : "Sign in"
-          ) : "Loading account"}
-        </div>
-        <div style={{ marginTop: 10, fontSize: 13, color: tk.textMid, lineHeight: 1.65 }}>
-          {!hasSupabaseConfig
-            ? "Add your Supabase project URL and anon key to a local .env file before using the shared login flow."
-            : authReady
-            ? "Each user gets their own isolated data. Sessions, all-time P/L, and analytics stay tied to the signed-in account."
-            : "Checking your current session."}
-        </div>
+      <div style={{ width: "100%", maxWidth: 400 }}>
 
-        {!hasSupabaseConfig ? (
-          <div style={{ ...quietPanel, marginTop: 18, padding: 14 }}>
-            <div style={{ fontSize: 11, color: tk.textDim, marginBottom: 8 }}>Add these env vars:</div>
-            <div style={{ fontSize: 13, color: tk.text, lineHeight: 1.7 }}>
-              `VITE_SUPABASE_URL`
-              <br />
-              `VITE_SUPABASE_ANON_KEY`
-            </div>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: tk.text }}>Posture</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: tk.textDim }}>
+            {authMode === "sign-up" && "Create your account"}
+            {authMode === "sign-in" && "Welcome back"}
+            {authMode === "forgot-password" && "Reset your password"}
+            {authMode === "reset-password" && "Choose a new password"}
           </div>
-        ) : !authReady ? (
-          <div style={{ ...quietPanel, marginTop: 18, padding: 14, fontSize: 13, color: tk.textMid }}>Loading session...</div>
-        ) : (
-          <>
-            <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-              {[
-                ["sign-in", "Sign in"],
-                ["sign-up", "Sign up"],
-              ].map(([mode, label]) => (
-                <button
-                  key={mode}
-                  onClick={() => {
-                    setAuthMode(mode);
-                    setAuthError("");
-                    setAuthNotice("");
-                  }}
-                  style={{
-                    ...actionButton,
-                    flex: 1,
-                    padding: "10px 14px",
-                    borderRadius: 999,
-                    background: authMode === mode ? tk.surface2 : "transparent",
-                    borderColor: authMode === mode ? tk.border : tk.borderSub,
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+        </div>
 
-            <form onSubmit={handleAuthSubmit} style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 12 }}>
-              {authMode === "sign-up" && (
-                <>
+        <div style={{ ...panel, padding: "24px 22px", borderRadius: 14 }}>
+          {!hasSupabaseConfig ? (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 700, color: tk.text, marginBottom: 8 }}>Connect Supabase</div>
+              <div style={{ ...quietPanel, padding: 12 }}>
+                <div style={{ fontSize: 11, color: tk.textDim, marginBottom: 6 }}>Add these env vars:</div>
+                <div style={{ fontSize: 12, color: tk.text, lineHeight: 1.8, fontFamily: "monospace" }}>
+                  VITE_SUPABASE_URL<br />VITE_SUPABASE_ANON_KEY
+                </div>
+              </div>
+            </>
+          ) : !authReady ? (
+            <div style={{ fontSize: 13, color: tk.textMid, textAlign: "center", padding: "8px 0" }}>Loading...</div>
+          ) : (
+            <>
+              <form onSubmit={handleAuthSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {authMode === "sign-up" && (
+                  <>
+                    <div>
+                      <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Invite code</label>
+                      <input
+                        value={authForm.inviteCode}
+                        onChange={e => setAuthForm(prev => ({ ...prev, inviteCode: e.target.value.toUpperCase() }))}
+                        placeholder="XXXXXXXX"
+                        autoFocus
+                        style={{ ...inp, fontFamily: "monospace", letterSpacing: "0.1em" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Name</label>
+                      <input
+                        value={authForm.fullName}
+                        onChange={e => setAuthForm(prev => ({ ...prev, fullName: e.target.value }))}
+                        placeholder="Your name"
+                        style={inp}
+                      />
+                    </div>
+                  </>
+                )}
+                {authMode !== "reset-password" && (
                   <div>
-                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Invite code</label>
+                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Email</label>
                     <input
-                      value={authForm.inviteCode}
-                      onChange={e => setAuthForm(prev => ({ ...prev, inviteCode: e.target.value.toUpperCase() }))}
-                      placeholder="XXXXXXXX"
-                      style={{ ...inp, fontFamily: "monospace", letterSpacing: "0.08em" }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Name</label>
-                    <input
-                      value={authForm.fullName}
-                      onChange={e => setAuthForm(prev => ({ ...prev, fullName: e.target.value }))}
-                      placeholder="Your name"
+                      type="email"
+                      value={authForm.email}
+                      onChange={e => setAuthForm(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="you@example.com"
+                      autoFocus={authMode === "sign-in"}
                       style={inp}
                     />
                   </div>
-                </>
-              )}
-              <div>
-                <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Email</label>
-                <input
-                  type="email"
-                  value={authForm.email}
-                  onChange={e => setAuthForm(prev => ({ ...prev, email: e.target.value }))}
-                  placeholder="you@example.com"
-                  style={inp}
-                />
-              </div>
-              <div>
-                <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Password</label>
-                <input
-                  type="password"
-                  value={authForm.password}
-                  onChange={e => setAuthForm(prev => ({ ...prev, password: e.target.value }))}
-                  placeholder={authMode === "forgot-password" ? "Not needed for reset email" : "Minimum 6 characters"}
-                  style={inp}
-                  disabled={authMode === "forgot-password"}
-                />
-              </div>
-              {authMode === "reset-password" && (
-                <div>
-                  <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Confirm password</label>
-                  <input
-                    type="password"
-                    value={authForm.confirmPassword}
-                    onChange={e => setAuthForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                    placeholder="Repeat your new password"
-                    style={inp}
-                  />
-                </div>
-              )}
-              <button
-                type="submit"
-                disabled={
-                  authBusy
-                  || !authForm.email.trim()
-                  || ((authMode === "sign-in" || authMode === "sign-up" || authMode === "reset-password") && !authForm.password)
-                  || (authMode === "reset-password" && !authForm.confirmPassword)
-                  || (authMode === "sign-up" && !authForm.inviteCode.trim())
-                }
-                style={{
-                  ...actionButton,
-                  marginTop: 4,
-                  padding: "12px 16px",
-                  borderRadius: 999,
-                  background: "rgba(16,163,127,0.10)",
-                  borderColor: `${accent}44`,
-                  color: accent,
-                }}
-              >
-                {authBusy
-                  ? "Working..."
-                  : authMode === "sign-up"
-                  ? "Create account"
-                  : authMode === "forgot-password"
-                  ? "Send reset email"
-                  : authMode === "reset-password"
-                  ? "Update password"
-                  : "Sign in"}
-              </button>
-            </form>
+                )}
+                {authMode !== "forgot-password" && (
+                  <div>
+                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Password</label>
+                    <input
+                      type="password"
+                      value={authForm.password}
+                      onChange={e => setAuthForm(prev => ({ ...prev, password: e.target.value }))}
+                      placeholder="Minimum 6 characters"
+                      style={inp}
+                    />
+                  </div>
+                )}
+                {authMode === "reset-password" && (
+                  <div>
+                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Confirm password</label>
+                    <input
+                      type="password"
+                      value={authForm.confirmPassword}
+                      onChange={e => setAuthForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                      placeholder="Repeat your new password"
+                      style={inp}
+                    />
+                  </div>
+                )}
 
-            {authMode === "sign-in" && (
-              <button
-                onClick={() => {
-                  setAuthMode("forgot-password");
-                  setAuthError("");
-                  setAuthNotice("");
-                }}
-                style={{ ...headerAction, marginTop: 10, color: tk.textMid, alignSelf: "flex-start" }}
-              >
-                Forgot password?
-              </button>
-            )}
-            {(authMode === "forgot-password" || authMode === "reset-password") && (
-              <button
-                onClick={() => {
-                  setAuthMode("sign-in");
-                  setAuthError("");
-                  setAuthNotice("");
-                }}
-                style={{ ...headerAction, marginTop: 10, color: tk.textMid, alignSelf: "flex-start" }}
-              >
-                Back to sign in
-              </button>
-            )}
+                {authError && <div style={{ fontSize: 13, color: red, marginTop: -4 }}>{authError}</div>}
+                {authNotice && <div style={{ fontSize: 13, color: green, lineHeight: 1.6, marginTop: -4 }}>{authNotice}</div>}
 
-            {authError && <div style={{ marginTop: 12, fontSize: 13, color: red }}>{authError}</div>}
-            {authNotice && <div style={{ marginTop: 12, fontSize: 13, color: green, lineHeight: 1.6 }}>{authNotice}</div>}
-          </>
-        )}
+                <button
+                  type="submit"
+                  disabled={
+                    authBusy
+                    || (authMode !== "forgot-password" && authMode !== "reset-password" && !authForm.email.trim())
+                    || ((authMode === "sign-in" || authMode === "sign-up" || authMode === "reset-password") && !authForm.password)
+                    || (authMode === "reset-password" && !authForm.confirmPassword)
+                    || (authMode === "sign-up" && !authForm.inviteCode.trim())
+                  }
+                  style={{
+                    ...actionButton,
+                    padding: "12px 16px",
+                    borderRadius: 999,
+                    background: "rgba(16,163,127,0.12)",
+                    borderColor: `${accent}44`,
+                    color: accent,
+                    fontWeight: 600,
+                    fontSize: 14,
+                    marginTop: 2,
+                  }}
+                >
+                  {authBusy ? "Working..." : authMode === "sign-up" ? "Create account" : authMode === "forgot-password" ? "Send reset email" : authMode === "reset-password" ? "Update password" : "Sign in"}
+                </button>
+              </form>
+
+              <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${tk.borderSub}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                {(authMode === "sign-up" || authMode === "sign-in") && (
+                  <span style={{ fontSize: 13, color: tk.textDim }}>
+                    {authMode === "sign-up" ? "Already have an account?" : "Don't have an account?"}
+                    {" "}
+                    <button onClick={() => switchMode(authMode === "sign-up" ? "sign-in" : "sign-up")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textMid, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3, fontFamily: sans }}>
+                      {authMode === "sign-up" ? "Sign in" : "Sign up"}
+                    </button>
+                  </span>
+                )}
+                {authMode === "sign-in" && (
+                  <button onClick={() => switchMode("forgot-password")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textDim, cursor: "pointer", fontFamily: sans }}>
+                    Forgot password?
+                  </button>
+                )}
+                {(authMode === "forgot-password" || authMode === "reset-password") && (
+                  <button onClick={() => switchMode("sign-in")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textDim, cursor: "pointer", fontFamily: sans }}>
+                    ← Back to sign in
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
