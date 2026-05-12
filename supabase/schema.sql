@@ -229,3 +229,30 @@ begin
 end;
 $$;
 grant execute on function public.list_invites to authenticated;
+
+-- Trigger: claim invite atomically when a new user is created.
+-- Runs as the user is inserted into auth.users, so it works whether
+-- email confirmation is required or not — no session needed.
+create or replace function public.handle_new_user_invite()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code text;
+begin
+  v_code := upper(trim(new.raw_user_meta_data->>'invite_code'));
+  if v_code is not null and v_code != '' then
+    update public.invites
+    set used_at = now(), used_by = new.id
+    where code = v_code and used_at is null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created_claim_invite on auth.users;
+create trigger on_auth_user_created_claim_invite
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user_invite();

@@ -36,13 +36,14 @@ export async function getCurrentUser() {
   return data.user;
 }
 
-export async function signUpWithEmail({ email, password, fullName }) {
+export async function signUpWithEmail({ email, password, fullName, inviteCode }) {
   const { data, error } = await getSupabase().auth.signUp({
     email,
     password,
     options: {
       data: {
         full_name: fullName || "",
+        invite_code: inviteCode || "",
       },
     },
   });

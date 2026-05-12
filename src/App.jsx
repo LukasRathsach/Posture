@@ -487,9 +487,9 @@ export default function App() {
           email: authForm.email.trim(),
           password: authForm.password,
           fullName: authForm.fullName.trim(),
+          inviteCode: code,
         });
         if (data.session) {
-          await claimInvite(code).catch(() => {});
           setAuthNotice("Account created and signed in.");
         } else {
           setAuthNotice("Account created. Check your email to confirm, then sign in.");
