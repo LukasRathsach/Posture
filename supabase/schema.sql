@@ -156,3 +156,76 @@ on public.user_live_positions
 for delete
 to authenticated
 using ((select auth.uid()) is not null and (select auth.uid()) = user_id);
+
+-- ── Invites ────────────────────────────────────────────────────────────────
+create table if not exists public.invites (
+  code       text        primary key,
+  created_at timestamptz not null default now(),
+  used_at    timestamptz,
+  used_by    uuid        references auth.users(id)
+);
+
+alter table public.invites enable row level security;
+
+-- Anyone (including anon) may check whether an unused code exists — no other data exposed.
+drop policy if exists "Read unused invites" on public.invites;
+create policy "Read unused invites" on public.invites
+  for select to anon, authenticated
+  using (used_at is null);
+
+-- No direct insert/update/delete from clients — only via the RPCs below.
+
+-- Admin: generate a new random invite code.
+create or replace function public.generate_invite()
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code text;
+begin
+  if (select email from auth.users where id = auth.uid()) != 'lrl@dsfwine.dk' then
+    raise exception 'Not authorized';
+  end if;
+  v_code := upper(substring(encode(gen_random_bytes(4), 'hex') for 8));
+  insert into public.invites (code) values (v_code);
+  return v_code;
+end;
+$$;
+grant execute on function public.generate_invite to authenticated;
+
+-- After signup: atomically mark an invite as used.
+create or replace function public.claim_invite(p_code text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.invites
+  set used_at = now(), used_by = auth.uid()
+  where code = p_code and used_at is null;
+  return found;
+end;
+$$;
+grant execute on function public.claim_invite to authenticated;
+
+-- Admin: list all invites (used and unused).
+create or replace function public.list_invites()
+returns table(code text, created_at timestamptz, used_at timestamptz)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if (select email from auth.users where id = auth.uid()) != 'lrl@dsfwine.dk' then
+    raise exception 'Not authorized';
+  end if;
+  return query
+    select i.code, i.created_at, i.used_at
+    from public.invites i
+    order by i.created_at desc;
+end;
+$$;
+grant execute on function public.list_invites to authenticated;

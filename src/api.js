@@ -171,6 +171,34 @@ export async function deletePaperTradesByIds(ids) {
   if (error) throw error;
 }
 
+export async function validateInviteCode(code) {
+  const { data } = await getSupabase()
+    .from("invites")
+    .select("code")
+    .eq("code", code.toUpperCase())
+    .is("used_at", null)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+export async function claimInvite(code) {
+  const { data, error } = await getSupabase().rpc("claim_invite", { p_code: code.toUpperCase() });
+  if (error) throw error;
+  return data;
+}
+
+export async function generateInvite() {
+  const { data, error } = await getSupabase().rpc("generate_invite");
+  if (error) throw error;
+  return data;
+}
+
+export async function listInvites() {
+  const { data, error } = await getSupabase().rpc("list_invites");
+  if (error) throw error;
+  return data || [];
+}
+
 export async function loadClosedPaperTrades(userId) {
   const trades = await loadPaperTrades(userId);
   return trades.filter(trade => !(trade.notes || "").startsWith(OPEN_TRADE_NOTE_PREFIX));

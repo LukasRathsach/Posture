@@ -18,6 +18,10 @@ import {
   signOutUser,
   signUpWithEmail,
   updateUserPassword,
+  validateInviteCode,
+  claimInvite,
+  generateInvite,
+  listInvites,
 } from "./api";
 
 const DAYS = ["M", "T", "W", "T", "F", "S", "S"];
@@ -182,13 +186,30 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
-  const [authForm, setAuthForm] = useState({ fullName: "", email: "", password: "", confirmPassword: "" });
+  const [authForm, setAuthForm] = useState({ fullName: "", email: "", password: "", confirmPassword: "", inviteCode: "" });
+  const [invitePanelOpen, setInvitePanelOpen] = useState(false);
+  const [inviteList, setInviteList] = useState([]);
+  const [inviteListLoading, setInviteListLoading] = useState(false);
+  const [inviteGenBusy, setInviteGenBusy] = useState(false);
+  const [inviteCopied, setInviteCopied] = useState("");
   const initialized = useRef(false);
   const saveTimer = useRef(null);
   const lastSyncedTradeKey = useRef("");
   const isLocalMode = !hasSupabaseConfig;
+  const isAdmin = authUser?.email === "lrl@dsfwine.dk";
   const now = new Date();
   const isCurrentMonth = currentMonth.y === now.getFullYear() && currentMonth.m === now.getMonth();
+
+  // ── Parse invite code from URL ────────────────────────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("invite");
+    if (code) {
+      setAuthForm(prev => ({ ...prev, inviteCode: code.toUpperCase() }));
+      setAuthMode("sign-up");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   // ── Auth / Supabase sync ──────────────────────────────────────────────────
   useEffect(() => {
@@ -459,16 +480,20 @@ export default function App() {
         await updateUserPassword(authForm.password);
         setAuthNotice("Password updated. You can now continue in the app.");
       } else if (authMode === "sign-up") {
+        const code = authForm.inviteCode.trim().toUpperCase();
+        const valid = await validateInviteCode(code);
+        if (!valid) throw new Error("Invalid or already used invite code.");
         const data = await signUpWithEmail({
           email: authForm.email.trim(),
           password: authForm.password,
           fullName: authForm.fullName.trim(),
         });
-        if (!data.session) {
-          setAuthNotice("Account created. Check your email to confirm your address, then sign in.");
-          setAuthMode("sign-in");
-        } else {
+        if (data.session) {
+          await claimInvite(code).catch(() => {});
           setAuthNotice("Account created and signed in.");
+        } else {
+          setAuthNotice("Account created. Check your email to confirm, then sign in.");
+          setAuthMode("sign-in");
         }
       } else {
         await signInWithEmail({
@@ -1394,15 +1419,26 @@ export default function App() {
 
             <form onSubmit={handleAuthSubmit} style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 12 }}>
               {authMode === "sign-up" && (
-                <div>
-                  <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Name</label>
-                  <input
-                    value={authForm.fullName}
-                    onChange={e => setAuthForm(prev => ({ ...prev, fullName: e.target.value }))}
-                    placeholder="Your name"
-                    style={inp}
-                  />
-                </div>
+                <>
+                  <div>
+                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Invite code</label>
+                    <input
+                      value={authForm.inviteCode}
+                      onChange={e => setAuthForm(prev => ({ ...prev, inviteCode: e.target.value.toUpperCase() }))}
+                      placeholder="XXXXXXXX"
+                      style={{ ...inp, fontFamily: "monospace", letterSpacing: "0.08em" }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Name</label>
+                    <input
+                      value={authForm.fullName}
+                      onChange={e => setAuthForm(prev => ({ ...prev, fullName: e.target.value }))}
+                      placeholder="Your name"
+                      style={inp}
+                    />
+                  </div>
+                </>
               )}
               <div>
                 <label style={{ ...labelStyle, display: "block", marginBottom: 6 }}>Email</label>
@@ -1444,6 +1480,7 @@ export default function App() {
                   || !authForm.email.trim()
                   || ((authMode === "sign-in" || authMode === "sign-up" || authMode === "reset-password") && !authForm.password)
                   || (authMode === "reset-password" && !authForm.confirmPassword)
+                  || (authMode === "sign-up" && !authForm.inviteCode.trim())
                 }
                 style={{
                   ...actionButton,
@@ -1540,6 +1577,7 @@ export default function App() {
                 </div>
               ) : <div />}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton }}>Invites</button>}
                 {!isLocalMode && <button onClick={handleSignOut} style={{ ...headerButton }}>Sign out</button>}
               </div>
             </div>
@@ -1563,6 +1601,12 @@ export default function App() {
                 </>
               )}
               {currencyToggle}
+              {isAdmin && (
+                <>
+                  <div style={{ width: 1, height: 22, background: tk.border }} />
+                  <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton }}>Invites</button>
+                </>
+              )}
               {!isLocalMode && (
                 <>
                   <div style={{ width: 1, height: 22, background: tk.border }} />
@@ -1610,6 +1654,69 @@ export default function App() {
     />
   );
 
+  // ── Invite panel ──────────────────────────────────────────────────────────
+  const invitePanel = invitePanelOpen ? (
+    <div onClick={() => setInvitePanelOpen(false)} style={{ position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.62)" : "rgba(31,35,40,0.28)", backdropFilter: "blur(8px)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: 16, width: "100%", maxWidth: 420, padding: "22px 20px 24px", fontFamily: sans }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>Invite codes</span>
+          <button onClick={() => setInvitePanelOpen(false)} style={{ ...headerButton, color: tk.textMid }}>Close</button>
+        </div>
+
+        <button
+          onClick={async () => {
+            setInviteGenBusy(true);
+            try {
+              const code = await generateInvite();
+              setInviteList(prev => [{ code, created_at: new Date().toISOString(), used_at: null }, ...prev]);
+            } catch (err) {
+              alert(err?.message || "Failed to generate code.");
+            } finally {
+              setInviteGenBusy(false);
+            }
+          }}
+          disabled={inviteGenBusy}
+          style={{ ...actionButton, width: "100%", padding: "10px 14px", borderRadius: 999, background: "rgba(16,163,127,0.10)", borderColor: `${accent}44`, color: accent, marginBottom: 16 }}
+        >
+          {inviteGenBusy ? "Generating..." : "+ Generate invite code"}
+        </button>
+
+        {inviteListLoading ? (
+          <div style={{ fontSize: 13, color: tk.textDim, textAlign: "center", padding: "12px 0" }}>Loading...</div>
+        ) : inviteList.length === 0 ? (
+          <div style={{ fontSize: 13, color: tk.textDim, textAlign: "center", padding: "12px 0" }}>No codes yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+            {inviteList.map(inv => {
+              const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${inv.code}`;
+              const copied = inviteCopied === inv.code;
+              return (
+                <div key={inv.code} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 10px", borderRadius: 8, background: inv.used_at ? tk.surface2 : `${accent}0d`, border: `1px solid ${inv.used_at ? tk.borderSub : accent + "22"}` }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 13, letterSpacing: "0.08em", color: inv.used_at ? tk.textDim : tk.text }}>{inv.code}</span>
+                    <span style={{ fontSize: 11, color: tk.textDim }}>{inv.used_at ? "Used" : "Available"}</span>
+                  </div>
+                  {!inv.used_at && (
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(inviteUrl);
+                        setInviteCopied(inv.code);
+                        setTimeout(() => setInviteCopied(""), 2000);
+                      }}
+                      style={{ ...headerButton, flexShrink: 0, color: copied ? green : tk.textMid }}
+                    >
+                      {copied ? "Copied!" : "Copy link"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   // ══════════════════════════════════════════════════════════════════════════
   // DESKTOP
   // ══════════════════════════════════════════════════════════════════════════
@@ -1642,6 +1749,7 @@ export default function App() {
             </div>
           </>
         )}
+        {invitePanel}
       </div>
     );
   }
@@ -1675,7 +1783,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {importModal}
+      {invitePanel}
     </div>
   );
 }
