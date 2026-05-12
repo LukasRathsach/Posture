@@ -710,34 +710,42 @@
       const remainingSol = currentPosition.positionSizeSol;
       const soldSol = Math.max(0, initialSol - remainingSol);
 
-      const investedUsd = sol ? initialSol * sol : null;
-      const soldUsd = sol ? soldSol * sol : null;
-      const remainingUsd = (sol && liveMC && currentPosition.entryMarketCap > 0)
-        ? remainingSol * (liveMC / currentPosition.entryMarketCap) * sol
-        : (sol ? remainingSol * sol : null);
-      const pnlUsd = (livePnlSol !== null && sol) ? livePnlSol * sol : null;
+      const fmtSol = v => `${v.toFixed(3)} SOL`;
+      const fmtVal = (solAmt, usdPrice, multiplier = 1) => {
+        if (sol && usdPrice) return formatUsdValue(solAmt * usdPrice * multiplier);
+        return fmtSol(solAmt * multiplier);
+      };
 
-      const pnlSign = pnlUsd !== null ? (pnlUsd >= 0 ? "+" : "") : "";
+      const remainingMultiplier = (liveMC && currentPosition.entryMarketCap > 0)
+        ? liveMC / currentPosition.entryMarketCap : 1;
+
+      const investedStr = fmtVal(initialSol, sol, 1);
+      const soldStr = soldSol > 0 ? fmtVal(soldSol, sol, 1) : "—";
+      const remainingStr = fmtVal(remainingSol, sol, remainingMultiplier);
+
       const pnlPctStr = livePnlPct !== null ? ` (${livePnlPct >= 0 ? "+" : ""}${livePnlPct.toFixed(1)}%)` : "";
       const pnlClass = livePnlSol !== null ? (livePnlSol >= 0 ? "is-pos" : "is-neg") : "";
+      const pnlStr = livePnlSol !== null
+        ? (sol ? (livePnlSol >= 0 ? "+" : "") + formatUsdValue(livePnlSol * sol) : (livePnlSol >= 0 ? "+" : "") + fmtSol(Math.abs(livePnlSol))) + pnlPctStr
+        : "—";
 
       posSummaryHtml = `
         <div class="td-overlay-pos-summary">
           <div class="td-overlay-pos-item">
             <span class="td-overlay-pos-label">Invested</span>
-            <span class="td-overlay-pos-value">${formatUsdValue(investedUsd)}</span>
+            <span class="td-overlay-pos-value">${investedStr}</span>
           </div>
           <div class="td-overlay-pos-item">
             <span class="td-overlay-pos-label">Sold</span>
-            <span class="td-overlay-pos-value">${soldSol > 0 ? formatUsdValue(soldUsd) : "—"}</span>
+            <span class="td-overlay-pos-value">${soldStr}</span>
           </div>
           <div class="td-overlay-pos-item">
             <span class="td-overlay-pos-label">Remaining</span>
-            <span class="td-overlay-pos-value">${formatUsdValue(remainingUsd)}</span>
+            <span class="td-overlay-pos-value">${remainingStr}</span>
           </div>
           <div class="td-overlay-pos-item">
             <span class="td-overlay-pos-label">PnL</span>
-            <span class="td-overlay-pos-value ${pnlClass}">${pnlUsd !== null ? pnlSign + formatUsdValue(pnlUsd) + pnlPctStr : "—"}</span>
+            <span class="td-overlay-pos-value ${pnlClass}">${pnlStr}</span>
           </div>
         </div>
       `;

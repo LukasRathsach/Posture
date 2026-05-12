@@ -1163,6 +1163,33 @@ export default function App() {
 
   const insightRail = (
     <aside style={{ display: "flex", flexDirection: "column", gap: 0, height: isDesktop ? "100%" : "auto", overflowY: isDesktop ? "auto" : "visible", paddingRight: isDesktop ? 0 : 0, borderLeft: isDesktop ? `1px solid ${tk.border}` : "none", background: railSectionBg }}>
+
+      {openTrades.length > 0 && (
+        <div style={{ padding: sectionPad, borderBottom: `1px solid ${tk.borderSub}` }}>
+          <div style={{ ...labelStyle, marginBottom: 8 }}>Live positions</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {openTrades.map(pos => {
+              const entryMC = pos.entryMarketCap;
+              const sizeSol = pos.positionSizeSol;
+              const sizeUsd = solPrice ? sizeSol * solPrice : null;
+              return (
+                <div key={pos.positionId} style={{ ...quietPanel, padding: "8px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>{pos.tokenName}</div>
+                    <div style={{ fontSize: 11, color: tk.textDim, marginTop: 2 }}>
+                      entry {entryMC >= 1e6 ? `$${(entryMC / 1e6).toFixed(2)}M` : entryMC >= 1e3 ? `$${(entryMC / 1e3).toFixed(0)}K` : `$${entryMC.toFixed(0)}`}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: tk.textMid, whiteSpace: "nowrap" }}>
+                    {sizeUsd !== null ? `$${sizeUsd.toFixed(2)}` : `${sizeSol.toFixed(3)} SOL`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div style={{
         padding: sectionPad,
         position: isDesktop ? "sticky" : "static",
