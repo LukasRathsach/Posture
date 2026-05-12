@@ -792,10 +792,7 @@
             </div>
           ` : `
             <div class="td-overlay-section">
-              <div class="td-overlay-contract">
-                <div class="td-overlay-label">Buy</div>
-                <div class="td-overlay-token-name">${state.detected.tokenName}</div>
-              </div>
+              <div class="td-overlay-label">Buy</div>
               <div class="td-overlay-preset-grid">
                 ${BUY_PRESETS.map(value => `<button class="td-overlay-preset" type="button" data-buy="${value}" ${state.virtualBalance < value ? "disabled" : ""}>${value} SOL</button>`).join("")}
               </div>
