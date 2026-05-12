@@ -415,3 +415,62 @@
   font-size: 13px;
   font-weight: 400;
 }
+
+.td-overlay-balance-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.td-overlay-balance-btn:hover {
+  opacity: 0.75;
+}
+
+.td-overlay-add-sol-hint {
+  font-size: 11px;
+  color: #50ff6c;
+  opacity: 0.7;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.td-overlay-add-sol-hint:hover {
+  opacity: 1;
+}
+
+.td-overlay-add-balance-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.td-overlay-balance-input {
+  width: 90px;
+  min-height: 26px;
+  padding: 3px 7px;
+  font-size: 13px;
+}
+
+.td-overlay-balance-confirm {
+  font-size: 12px;
+  color: #50ff6c;
+  white-space: nowrap;
+}
+
+.td-overlay-add-more-sol {
+  font: inherit;
+  font-size: 11px;
+  color: #50ff6c;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.65;
+  text-align: left;
+}
+
+.td-overlay-add-more-sol:hover {
+  opacity: 1;
+}

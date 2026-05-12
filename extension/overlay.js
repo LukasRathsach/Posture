@@ -9,6 +9,7 @@
   const FORCE_OVERLAY_KEY = "td_force_overlay";
   const OVERLAY_POSITION_KEY = "td_overlay_position";
   const OVERLAY_COMPACT_KEY = "td_overlay_compact";
+  const VIRTUAL_BALANCE_KEY = "td_virtual_balance";
   const OPEN_TRADE_NOTE_PREFIX = "__TD_OPEN__";
   const BUY_PRESETS = [0.1, 0.2, 0.4, 1];
   const SELL_PRESETS = [10, 25, 50, 100];
@@ -32,6 +33,8 @@
     tokenMetadata: null,
     solPriceUsd: null,
     livePairPriceNative: null,
+    virtualBalance: 0,
+    addingBalance: false,
   };
 
   let pageRefreshTimer = null;
@@ -589,6 +592,10 @@
     await storage.set({ [OPEN_POSITIONS_KEY]: state.openPositions });
   }
 
+  async function saveVirtualBalance() {
+    await storage.set({ [VIRTUAL_BALANCE_KEY]: state.virtualBalance });
+  }
+
   async function saveOverlayUiState() {
     await storage.set({
       [OVERLAY_POSITION_KEY]: state.position,
@@ -686,7 +693,7 @@
     applyOverlayPosition();
 
     const currentPosition = getCurrentPosition();
-    const solBalanceLabel = `${getCurrentSolBalance().toFixed(2)} SOL`;
+    const solBalanceLabel = `${state.virtualBalance.toFixed(2)} SOL`;
 
     let livePnlPct = null;
     let livePnlSol = null;
@@ -751,8 +758,16 @@
       <div class="td-overlay-shell">
           <div class="td-overlay-head">
             <div class="td-overlay-head-summary">
-              <div class="td-overlay-balance">${solBalanceLabel}</div>
-              ${livePnlPct !== null ? `<div class="td-overlay-live-pnl ${livePnlPct >= 0 ? "is-positive" : "is-negative"}">${formatSignedPct(livePnlPct)} · ${formatSignedSol(livePnlSol)}</div>` : ""}
+              ${state.addingBalance ? `
+                <div class="td-overlay-add-balance-row">
+                  <input class="td-overlay-input td-overlay-balance-input" type="number" min="0" step="0.1" placeholder="SOL amount" data-balance-input />
+                  <button class="td-overlay-inline-btn td-overlay-balance-confirm" type="button" data-balance-confirm>Add</button>
+                  <button class="td-overlay-inline-btn" type="button" data-balance-cancel>✕</button>
+                </div>
+              ` : `
+                <button class="td-overlay-balance td-overlay-balance-btn" type="button" data-add-balance title="Tap to add SOL">${solBalanceLabel}</button>
+                ${state.virtualBalance === 0 ? `<div class="td-overlay-add-sol-hint" data-add-balance>Add SOL</div>` : ""}
+              `}
             </div>
             <div class="td-overlay-head-actions">
               <button class="td-overlay-icon-btn td-overlay-icon-btn-settings" type="button" data-refresh>${settingsIcon}</button>
@@ -774,8 +789,9 @@
                 <div class="td-overlay-token-name">${state.detected.tokenName}</div>
               </div>
               <div class="td-overlay-preset-grid">
-                ${BUY_PRESETS.map(value => `<button class="td-overlay-preset" type="button" data-buy="${value}">${value} SOL</button>`).join("")}
+                ${BUY_PRESETS.map(value => `<button class="td-overlay-preset" type="button" data-buy="${value}" ${state.virtualBalance < value ? "disabled" : ""}>${value} SOL</button>`).join("")}
               </div>
+              ${state.virtualBalance === 0 ? `<button class="td-overlay-add-more-sol" type="button" data-add-balance>+ Add SOL to start trading</button>` : ""}
 
               <div class="td-overlay-label">Sell</div>
               ${posSummaryHtml}
@@ -792,6 +808,42 @@
         </div>
       </div>
     `;
+
+    root.querySelectorAll("[data-add-balance]").forEach(el => el.addEventListener("click", () => {
+      state.addingBalance = true;
+      render();
+      setTimeout(() => root.querySelector("[data-balance-input]")?.focus(), 0);
+    }));
+
+    root.querySelector("[data-balance-cancel]")?.addEventListener("click", () => {
+      state.addingBalance = false;
+      render();
+    });
+
+    root.querySelector("[data-balance-confirm]")?.addEventListener("click", async () => {
+      const val = Number(root.querySelector("[data-balance-input]")?.value || 0);
+      if (val > 0) {
+        state.virtualBalance = Number((state.virtualBalance + val).toFixed(4));
+        await saveVirtualBalance();
+      }
+      state.addingBalance = false;
+      render();
+    });
+
+    root.querySelector("[data-balance-input]")?.addEventListener("keydown", async e => {
+      if (e.key === "Enter") {
+        const val = Number(e.target.value || 0);
+        if (val > 0) {
+          state.virtualBalance = Number((state.virtualBalance + val).toFixed(4));
+          await saveVirtualBalance();
+        }
+        state.addingBalance = false;
+        render();
+      } else if (e.key === "Escape") {
+        state.addingBalance = false;
+        render();
+      }
+    });
 
     root.querySelector("[data-refresh]")?.addEventListener("click", () => {
       state.detected = detectPageSnapshot();
@@ -870,6 +922,8 @@
             ...nextPosition,
             backendTradeId,
           };
+          state.virtualBalance = Number(Math.max(0, state.virtualBalance - size).toFixed(4));
+          await saveVirtualBalance();
           await saveOpenPositions();
           setStatus(`Position synced: ${state.openPositions[positionKey].positionSizeSol.toFixed(2)} SOL`, "good");
         } catch (error) {
@@ -963,6 +1017,9 @@
         }
       }
 
+      const returnedSol = positionSizeSol + pnlSol;
+      state.virtualBalance = Number((state.virtualBalance + returnedSol).toFixed(4));
+      await saveVirtualBalance();
       await saveOpenPositions();
       await loadTrades();
       setStatus("Trade sync completed.", "good");
@@ -1004,13 +1061,14 @@
       });
     }
 
-    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, OVERLAY_COMPACT_KEY]);
+    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, OVERLAY_COMPACT_KEY, VIRTUAL_BALANCE_KEY]);
     state.session = stored.td_session || null;
     state.openPositions = stored[OPEN_POSITIONS_KEY] || {};
     state.enabled = stored[EXTENSION_ENABLED_KEY] !== false;
     state.forceOverlay = stored[FORCE_OVERLAY_KEY] === true;
     state.compact = Boolean(stored[OVERLAY_COMPACT_KEY]);
     state.position = clampPosition(stored[OVERLAY_POSITION_KEY] || state.position);
+    state.virtualBalance = Number(stored[VIRTUAL_BALANCE_KEY] || 0);
     state.detected = detectPageSnapshot();
 
     if (state.session?.access_token) {
