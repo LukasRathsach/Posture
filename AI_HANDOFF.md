@@ -17,12 +17,13 @@ The most important product requirement is:
 
 ## Current state
 
-As of 2026-05-11:
+As of 2026-05-12 (latest):
 
 - `npm run build` passes
-- project is **not** a git repo in the current workspace
+- project is a git repo (branch: `main`)
 - Supabase-backed sync is in use for paper trades
 - open positions are tracked both locally in extension storage and canonically in Supabase
+- session auto-sync between extension and dashboard is live via `extension/dashboard-bridge.js`
 
 ## Key files
 
@@ -43,6 +44,31 @@ As of 2026-05-11:
   - imported trade merging and dashboard helpers
 
 ## Important trade-flow decisions
+
+### 0. P/L accounting — must match Axiom
+
+**Entry price on multiple buys: token-weighted harmonic mean, not arithmetic mean.**
+
+When the user buys the same token multiple times, buying at a higher MC gets you fewer tokens per SOL. The correct weighted average entry is:
+
+```js
+const oldTokenBasis = current.positionSizeSol / current.entryMarketCap;
+const newTokenBasis  = addSize / snapshot.marketCap;
+const weightedEntryMC = nextPositionSizeSol / (oldTokenBasis + newTokenBasis);
+```
+
+The old arithmetic formula `(oldMC × oldSize + newMC × newSize) / totalSize` is **wrong** — it understates gains when adding to a winner.
+
+**Live P/L = realized + unrealized.**
+
+Each partial sell accumulates `realizedPnlSol` on the open position object (persisted in the `__TD_OPEN__` note JSON). The displayed P/L is:
+
+```js
+livePnlSol = (remainingSize × (currentMC / entryMC - 1)) + realizedPnlSol;
+livePnlPct = livePnlSol / initialSizeSol × 100;
+```
+
+This prevents the confusing case where partial sells at profit + a small remaining-position dip shows as an overall loss.
 
 ### 1. Market cap capture strategy
 
@@ -82,6 +108,16 @@ Relevant helpers in `extension/overlay.js`:
 - `loadOpenPositionsFromBackend()`
 - `deleteTrade(tradeId)`
 
+Current note payload now also carries richer audit / automation state when present:
+
+- `entryCapture`
+- `lastCapture`
+- `events`
+- `stopLossPct`
+- `targetSellPct`
+
+Realized close rows may now also use a structured `__TD_CLOSE__{...}` note payload for close audit metadata.
+
 ### 3. Dashboard sync compatibility
 
 `src/api.js` understands both:
@@ -93,18 +129,21 @@ That backward compatibility is deliberate and should be preserved unless a clean
 
 ## Current overlay behavior
 
-- top-left force-overlay badge removed
-- live trades footer removed
-- header shows:
-  - current SOL position size
-  - market cap
-- compact mode keeps full width and only reduces height
-- sell section shows quick actions only:
-  - `10%`
-  - `25%`
-  - `50%`
-  - `100%`
-  - `Sell init`
+- header is a 3-column grid: `[positions toggle + stats icon] [SOL icon + balance centered] [person icon]`
+- positions toggle (list icon / live trades icon) sits left of the stats icon at all times; shows/hides the positions nav panel; turns green when active
+- stats icon (bar chart) is an `<a>` that opens the dashboard URL in a new tab
+- person icon opens a minimal menu with only `Sign out` when authenticated
+- open positions can store stop loss / target sell percentages in the open-note payload
+- stop loss / target sell are checked against live P/L % and auto-close the paper trade when hit
+- auto-close now resolves against the already-known live capture / live MC path instead of forcing a second brittle DOM scrape at trigger time when possible
+- position audit state is appended to the open-note payload via capture metadata and a capped event timeline
+- **compact mode has been removed entirely** — do not re-add it
+- **drag-dot indicator removed** — dragging still works via the header bar
+- sell section shows quick actions: `10%`, `25%`, `50%`, `100%`; "Sell init." is far right on its own row
+- section labels (Buy / Sell / Positions) are 11px, weight 500, uppercase
+- SOL icon (Solana gradient logo) is shown inline with the balance number
+- hovering the SOL balance shows the tooltip: `"need more SOL? add here"`
+- no "Set balance to start trading" prompts anywhere in the main flow
 
 ## Axiom data detection notes
 
@@ -169,6 +208,96 @@ Conclusion:
 4. **One open position per token assumption**
    - overlay state now prefers `contractAddress` as the open-position key and falls back to `tokenName`
    - this was added because token-name-only matching had started to feel brittle
+
+## Dashboard trade list — grouping behaviour
+
+Trades in the session modal are **grouped by instrument (token name)** before display. Multiple partial sells on the same token appear as a single row showing combined net P/L.
+
+- `__TD_OPEN__` placeholder records are filtered out of the display (they appear in `tradeList` for fee counting but are not shown as completed trades)
+- A group with multiple closes shows a `"N CLOSES"` label
+- The `%` shown is a weighted average across all closes
+- The delete button on a grouped row deletes all individual trade records in the group
+- The underlying `tradeList` data is unchanged — fee/stat calculations still see individual records
+
+Relevant: `displayTradeGroups` computed value in `src/App.jsx`, defined near line 765.
+
+## Dashboard UI conventions
+
+- **Inline styles everywhere** — this project does not use a CSS framework. Add styles inline in JSX. Only add to `src/index.css` for things that genuinely cannot be done inline (pseudo-elements, animations, scrollbar).
+- **Blue accent borders are paused** — removed at user request. Do not re-add unless asked.
+- **Do not push to GitHub** without the user explicitly asking.
+
+## Dashboard settings panel
+
+A settings panel is accessible via the sliders icon in the header (right of sign out). It provides:
+
+1. **Theme** — 4 color presets (amber, teal, violet, rose). Each preset changes both the accent color AND the full background/surface palette (`bg`, `surface1`–`3`, `border`, etc.). Selection is persisted to `localStorage` under `posture_accent_key`.
+2. **Virtual balance** — SOL balance for paper trading purposes. Stored in `localStorage` under `posture_virtual_balance`. The "Reset balance" button also fires `window.postMessage({ source: "posture-page", type: "reset_balance" }, "*")`, which `extension/dashboard-bridge.js` picks up and clears `td_virtual_balance` from `chrome.storage.local`.
+
+### Theme implementation
+
+`ACCENT_PRESETS` is defined at the top of `App.jsx` (before any useState hooks). Each preset includes `base`, `dim`, and a `dark` object with full color overrides. The active theme is computed as:
+
+```js
+const tk = dark
+  ? { ...THEME.dark, ...activeAccentPreset.dark, modalBg: ..., modalSurf: ... }
+  : THEME.light;
+```
+
+A `useEffect` also updates `document.body.style.background` when the key changes. Light mode always uses `THEME.light` (unchanged).
+
+## Dashboard header layout
+
+Desktop: `[SOL icon + P/L] | [user icon + name + streak] [currency toggle] || [settings icon] [sign out]`
+- SOL+P/L is the leftmost item; sign out is the rightmost
+- The right section is `grid-template-columns: minmax(0, 1fr) auto`
+
+Mobile: `[SOL+P/L + user icon + name + streak] ... [currency toggle] [settings icon] [sign out]`
+
+## Mission goals ("Next focus" rail)
+
+All 3 goals are always shown, including completed ones (no `filter(!done)` anymore). Completed goals render with green text, a green checkmark, and a full green bar.
+
+## Session sync (extension ↔ dashboard)
+
+`extension/dashboard-bridge.js` runs as a content script on the dashboard URL at `document_start`. It:
+1. Reads `td_session` from `chrome.storage.local`
+2. Writes it to `localStorage` under the Supabase key before Supabase initialises
+3. Also sends a `posture-bridge` postMessage as a fallback
+4. Mirrors `td_virtual_balance` into dashboard `localStorage` and sends a `posture-bridge` balance message
+5. Mirrors `td_open_positions` into dashboard `localStorage` and sends a `posture-bridge` open-position message
+4. Listens for `posture-page` messages:
+   - `type: "session_update"` — writes/clears `td_session` in chrome.storage
+   - `type: "balance_update"` — writes `td_virtual_balance` in chrome.storage
+   - `type: "reset_balance"` — removes `td_virtual_balance` from chrome.storage (so extension overlay resets to 0)
+
+`src/App.jsx` listens for the bridge postMessages and:
+- calls `supabase.auth.setSession()` if needed
+- accepts injected balance updates from the extension
+- accepts injected extension open positions for reconciliation UI
+- posts balance changes back through `posture-page`
+
+On auth state change, the dashboard postMessages back so the extension auto-logs in.
+
+## Dashboard live-position trust surface
+
+The right rail `Live positions` section now does more than list token + size:
+
+- shows a reconciliation health summary between backend open rows and extension local open positions
+- shows capture source / capture time for each open position
+- shows stop loss / target sell values when configured
+- shows a capped activity timeline sourced from the open-note `events` array
+
+If you change the open-note payload shape, update both:
+
+- `extension/overlay.js`
+- `src/api.js`
+
+If you change realized trade audit metadata, also update:
+
+- `extension/overlay.js` (`__TD_CLOSE__`)
+- `src/api.js`
+- `src/utils.js`
 
 ## Recommended next improvements
 

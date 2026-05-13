@@ -10,7 +10,8 @@
   ],
   "host_permissions": [
     "https://*.supabase.co/*",
-    "https://api.dexscreener.com/*"
+    "https://api.dexscreener.com/*",
+    "https://trading-dashboard-v8ns.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,6 +28,16 @@
       "js": [
         "config.js",
         "overlay.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://trading-dashboard-v8ns.onrender.com/*"
+      ],
+      "js": [
+        "config.js",
+        "dashboard-bridge.js"
       ],
       "run_at": "document_start"
     }

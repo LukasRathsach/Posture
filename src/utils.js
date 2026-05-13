@@ -1,12 +1,12 @@
 export const FEE_PER_TRADE = 0.01;
 export const RULES = { minEntryMC: 10000, maxLossPct: -30, maxTradesPerHour: 5 };
 
-export const accent    = "#10a37f";
-export const accentDim = "#08785f";
-export const green     = "#19a974";
-export const red       = "#d64545";
-export const serif     = "'Geist Sans', 'Geist', system-ui, sans-serif";
-export const sans      = "'Geist Sans', 'Geist', system-ui, sans-serif";
+export const accent    = "#F59E0B";
+export const accentDim = "#D97706";
+export const green     = "#22C55E";
+export const red       = "#EF4444";
+export const serif     = "'Inter', 'Geist Sans', system-ui, sans-serif";
+export const sans      = "'Inter', 'Geist Sans', system-ui, sans-serif";
 
 export const fmtSol   = v => { const n = parseFloat(v); return (n >= 0 ? "+" : "") + n.toFixed(2) + " SOL"; };
 export const fmtPct   = v => { const n = parseFloat(v); return (n >= 0 ? "+" : "") + n.toFixed(1) + "%"; };
@@ -79,6 +79,7 @@ export function mergeImportedTrades(trades, setSessions, good = "", bad = "") {
       pnlPct: parseFloat((trade.pnlPercentage || 0).toFixed(2)),
       entryMC: trade.entryMarketCap || 0,
       exitMC: trade.exitMarketCap || 0,
+      closeMeta: trade.closeMeta || null,
       notes: trade.notes || "",
       timestamp: trade.timestamp,
     }))
@@ -162,14 +163,14 @@ export function summarizeReflectionTrends(sessions) {
 
 export const THEME = {
   dark: {
-    bg: "#06070a", surface1: "#0b0d11", surface2: "#090b0f", surface3: "#07090d",
-    border: "#14171d", borderSub: "#0f1217",
-    text: "#f4f4f5", textMid: "#9197a3", textDim: "#646b77",
-    modalBg: "#0a0c10", modalSurf: "#0d1014",
-    inp: { bg: "#0a0c10", border: "#191d24", color: "#f4f4f5" },
-    calWin:  { bg: "#0f1f1a", border: "#1c3a31" },
-    calBigWin: { bg: "#2b261d", border: "#4d4533", text: "#d8bb6d" },
-    calLoss: { bg: "#1f1415", border: "#402628" },
+    bg: "#0F172A", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929",
+    border: "#334155", borderSub: "#1E293B",
+    text: "#F8FAFC", textMid: "#94A3B8", textDim: "#64748B",
+    modalBg: "#0F172A", modalSurf: "#1E293B",
+    inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" },
+    calWin:    { bg: "#0C2518", border: "#14532D" },
+    calBigWin: { bg: "#1C1408", border: "#78350F", text: "#FBBF24" },
+    calLoss:   { bg: "#1A0F10", border: "#7F1D1D" },
   },
   light: {
     bg: "#f7f7f5", surface1: "#ffffff", surface2: "#f2f3f1", surface3: "#eceeeb",

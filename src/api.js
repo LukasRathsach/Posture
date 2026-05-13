@@ -73,6 +73,15 @@ export async function sendPasswordResetEmail(email, redirectTo) {
   return data;
 }
 
+export async function setSessionFromTokens(accessToken, refreshToken) {
+  if (!hasSupabaseConfig) return;
+  const { error } = await getSupabase().auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  });
+  if (error) throw error;
+}
+
 export async function updateUserPassword(password) {
   const { data, error } = await getSupabase().auth.updateUser({
     password,
@@ -113,18 +122,30 @@ export async function loadPaperTrades(userId) {
 
   if (error) throw error;
   return (data || []).map(trade => ({
+    closeMeta: parseCloseTradeNote(trade.notes || ""),
     id: trade.id,
     tokenName: trade.token_name || "?",
     pnlSol: Number(trade.pnl_sol || 0),
     pnlPercentage: Number(trade.pnl_percentage || 0),
     entryMarketCap: Number(trade.entry_market_cap || 0),
     exitMarketCap: Number(trade.exit_market_cap || 0),
-    notes: trade.notes || "",
+    notes: parseCloseTradeNote(trade.notes || "") ? "" : (trade.notes || ""),
     timestamp: trade.trade_timestamp ? new Date(trade.trade_timestamp).getTime() : Date.now(),
   }));
 }
 
 const OPEN_TRADE_NOTE_PREFIX = "__TD_OPEN__";
+const CLOSE_TRADE_NOTE_PREFIX = "__TD_CLOSE__";
+
+function parseCloseTradeNote(note) {
+  if (!(note || "").startsWith(CLOSE_TRADE_NOTE_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(String(note).slice(CLOSE_TRADE_NOTE_PREFIX.length));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 function parseOpenTradeNote(note, trade) {
   if (!(note || "").startsWith(OPEN_TRADE_NOTE_PREFIX)) return null;
@@ -140,11 +161,17 @@ function parseOpenTradeNote(note, trade) {
       positionSizeSol: Number(parsed.positionSizeSol || 0),
       initialSizeSol: Number(parsed.initialSizeSol || parsed.positionSizeSol || 0),
       entryMarketCap: Number(parsed.entryMarketCap || trade.entry_market_cap || trade.entryMarketCap || 0),
+      realizedPnlSol: Number(parsed.realizedPnlSol || 0),
       openedAt: Number(parsed.openedAt || fallbackTimestamp),
       pageUrl: parsed.pageUrl || "",
       marketCapSource: parsed.marketCapSource || "unknown",
       contractAddress: parsed.contractAddress || "",
       pairAddress: parsed.pairAddress || "",
+      stopLossPct: parsed.stopLossPct ?? null,
+      targetSellPct: parsed.targetSellPct ?? null,
+      entryCapture: parsed.entryCapture || null,
+      lastCapture: parsed.lastCapture || null,
+      events: Array.isArray(parsed.events) ? parsed.events : [],
     };
   } catch {
     const legacySize = Number(raw || 0);
@@ -154,11 +181,17 @@ function parseOpenTradeNote(note, trade) {
       positionSizeSol: legacySize,
       initialSizeSol: legacySize,
       entryMarketCap: Number(trade.entry_market_cap || trade.entryMarketCap || 0),
+      realizedPnlSol: 0,
       openedAt: fallbackTimestamp,
       pageUrl: "",
       marketCapSource: "legacy",
       contractAddress: "",
       pairAddress: "",
+      stopLossPct: null,
+      targetSellPct: null,
+      entryCapture: null,
+      lastCapture: null,
+      events: [],
     };
   }
 }
@@ -217,10 +250,16 @@ export async function loadOpenPaperTrades(userId) {
       positionSizeSol: parsed.positionSizeSol,
       initialSizeSol: parsed.initialSizeSol,
       entryMarketCap: parsed.entryMarketCap,
+      realizedPnlSol: parsed.realizedPnlSol,
       openedAt: parsed.openedAt,
       pageUrl: parsed.pageUrl,
       marketCapSource: parsed.marketCapSource,
       contractAddress: parsed.contractAddress,
       pairAddress: parsed.pairAddress,
+      stopLossPct: parsed.stopLossPct,
+      targetSellPct: parsed.targetSellPct,
+      entryCapture: parsed.entryCapture,
+      lastCapture: parsed.lastCapture,
+      events: parsed.events,
     }));
 }

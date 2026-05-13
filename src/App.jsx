@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  FEE_PER_TRADE, accent, accentDim, green, red, sans,
+  FEE_PER_TRADE, green, red, sans,
   fmtPct, fmtColor, netPnl, tradeNet, emptyTrade,
   checkTrade, sessionViolations, mergeImportedTrades, THEME
 } from "./utils";
@@ -18,6 +18,7 @@ import {
   signOutUser,
   signUpWithEmail,
   updateUserPassword,
+  setSessionFromTokens,
   validateInviteCode,
   claimInvite,
   generateInvite,
@@ -45,14 +46,86 @@ function loadLocalSessions() {
 
 export default function App() {
   // ── Theme ──────────────────────────────────────────────────────────────────
+  const ACCENT_PRESETS = [
+    {
+      key: "amber", base: "#F59E0B", dim: "#D97706",
+      dark: { bg: "#0F172A", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929", border: "#334155", borderSub: "#1E293B", inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" } },
+    },
+    {
+      key: "teal", base: "#14B8A6", dim: "#0D9488",
+      dark: { bg: "#061516", surface1: "#0C2426", surface2: "#081B1D", surface3: "#051012", border: "#165054", borderSub: "#0C2426", inp: { bg: "#0C2426", border: "#165054", color: "#F8FAFC" } },
+    },
+    {
+      key: "violet", base: "#8B5CF6", dim: "#7C3AED",
+      dark: { bg: "#0D0B18", surface1: "#17132A", surface2: "#110F21", surface3: "#0A0815", border: "#2C2350", borderSub: "#17132A", inp: { bg: "#17132A", border: "#2C2350", color: "#F8FAFC" } },
+    },
+    {
+      key: "rose", base: "#F43F5E", dim: "#E11D48",
+      dark: { bg: "#130810", surface1: "#221018", surface2: "#1A0C15", surface3: "#0F060C", border: "#3D1425", borderSub: "#221018", inp: { bg: "#221018", border: "#3D1425", color: "#F8FAFC" } },
+    },
+  ];
   const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const [accentKey, setAccentKey] = useState(() => localStorage.getItem("posture_accent_key") || "amber");
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const h = e => setDark(e.matches);
     mq.addEventListener("change", h);
     return () => mq.removeEventListener("change", h);
   }, []);
-  const tk = dark ? THEME.dark : THEME.light;
+  const activeAccentPreset = ACCENT_PRESETS.find(p => p.key === accentKey) ?? ACCENT_PRESETS[0];
+  const accent = activeAccentPreset.base;
+  const accentDim = activeAccentPreset.dim;
+  const baseDark = THEME.dark;
+  const tk = dark
+    ? { ...baseDark, ...activeAccentPreset.dark, modalBg: activeAccentPreset.dark.bg, modalSurf: activeAccentPreset.dark.surface1 }
+    : THEME.light;
+  useEffect(() => {
+    if (!dark) return;
+    document.documentElement.style.background = activeAccentPreset.dark.bg;
+    document.body.style.background = activeAccentPreset.dark.bg;
+  }, [accentKey, dark]);
+
+  // ── Settings panel ─────────────────────────────────────────────────────────
+  const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [virtualBalance, setVirtualBalance] = useState(() => Number(localStorage.getItem("posture_virtual_balance") || "0"));
+  const [balanceInputVal, setBalanceInputVal] = useState("");
+  const settingsWrapperRef = useRef(null);
+  const profileMenuRef = useRef(null);
+
+  const syncVirtualBalance = nextValue => {
+    const normalized = Math.max(0, Number(nextValue || 0));
+    const rounded = Number(normalized.toFixed(4));
+    setVirtualBalance(rounded);
+    localStorage.setItem("posture_virtual_balance", String(rounded));
+    window.postMessage({ source: "posture-page", type: "balance_update", value: rounded }, "*");
+  };
+
+  const resetVirtualBalance = () => {
+    setVirtualBalance(0);
+    localStorage.removeItem("posture_virtual_balance");
+    window.postMessage({ source: "posture-page", type: "reset_balance" }, "*");
+  };
+
+  useEffect(() => {
+    if (!settingsPanelOpen) return;
+    const handler = e => {
+      if (settingsWrapperRef.current && !settingsWrapperRef.current.contains(e.target))
+        setSettingsPanelOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [settingsPanelOpen]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    const handler = e => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target))
+        setProfileMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [profileMenuOpen]);
 
   // ── Responsive ─────────────────────────────────────────────────────────────
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 900);
@@ -94,17 +167,6 @@ export default function App() {
     const sign = usd >= 0 ? "+" : "-";
     if (abs >= 1000) return sign + (abs / 1000).toFixed(1) + "K USD";
     return sign + Math.round(abs) + " USD";
-  };
-
-  const fmtHeaderPnl = sol => {
-    const n = parseFloat(sol);
-    const sign = n >= 0 ? "+" : "-";
-    if (calendarUnit === "sol" || solPrice === null) {
-      return sign + Math.abs(n).toFixed(2) + " SOL";
-    }
-    const usd = n * solPrice;
-    const abs = Math.abs(usd);
-    return abs >= 1000 ? sign + (abs / 1000).toFixed(1) + "K USD" : sign + Math.round(abs) + " USD";
   };
 
   const fmtCalendarValue = (sol, compact = false) => {
@@ -170,6 +232,15 @@ export default function App() {
   // ── Data ───────────────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState([]);
   const [openTrades, setOpenTrades] = useState([]);
+  const [extensionOpenPositions, setExtensionOpenPositions] = useState(() => {
+    try {
+      const raw = localStorage.getItem("posture_extension_open_positions");
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const [currentMonth, setCurrentMonth] = useState(() => {
     const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() };
   });
@@ -248,11 +319,68 @@ export default function App() {
         setModal(null);
         setSyncStatus("loading");
       }
+      // Sync session to extension
+      window.postMessage({
+        source: "posture-page",
+        type: "session_update",
+        access_token: session?.access_token ?? null,
+        refresh_token: session?.refresh_token ?? null,
+        user: session?.user ?? null,
+      }, "*");
     });
+
+    const handleBridgeMessage = async e => {
+      if (e.source !== window) return;
+      if (e.data?.source !== "posture-bridge") return;
+      if (e.data?.type === "inject_session") {
+        const { access_token, refresh_token } = e.data;
+        if (!access_token || !refresh_token) return;
+        try { await setSessionFromTokens(access_token, refresh_token); } catch (_) {}
+      }
+      if (e.data?.type === "inject_balance") {
+        const next = e.data.value;
+        if (next === null || next === undefined) {
+          setVirtualBalance(0);
+          localStorage.removeItem("posture_virtual_balance");
+          return;
+        }
+        const parsed = Number(next);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          const rounded = Number(parsed.toFixed(4));
+          setVirtualBalance(rounded);
+          localStorage.setItem("posture_virtual_balance", String(rounded));
+        }
+      }
+      if (e.data?.type === "inject_open_positions") {
+        const next = e.data.value;
+        const normalized = next && typeof next === "object" ? next : {};
+        setExtensionOpenPositions(normalized);
+        localStorage.setItem("posture_extension_open_positions", JSON.stringify(normalized));
+      }
+    };
+    window.addEventListener("message", handleBridgeMessage);
+
+    const handleStorage = e => {
+      if (e.key === "posture_virtual_balance") {
+        const parsed = Number(e.newValue || 0);
+        setVirtualBalance(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0);
+      }
+      if (e.key === "posture_extension_open_positions") {
+        try {
+          const parsed = e.newValue ? JSON.parse(e.newValue) : {};
+          setExtensionOpenPositions(parsed && typeof parsed === "object" ? parsed : {});
+        } catch {
+          setExtensionOpenPositions({});
+        }
+      }
+    };
+    window.addEventListener("storage", handleStorage);
 
     return () => {
       alive = false;
       data.subscription.unsubscribe();
+      window.removeEventListener("message", handleBridgeMessage);
+      window.removeEventListener("storage", handleStorage);
     };
   }, [isLocalMode]);
 
@@ -348,6 +476,80 @@ export default function App() {
   }, [modal]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
+  const formatAuditMc = value => {
+    const mc = Number(value || 0);
+    if (!(mc > 0)) return "—";
+    if (mc >= 1e9) return `$${(mc / 1e9).toFixed(2)}B`;
+    if (mc >= 1e6) return `$${(mc / 1e6).toFixed(2)}M`;
+    if (mc >= 1e3) return `$${(mc / 1e3).toFixed(1)}K`;
+    return `$${mc.toFixed(0)}`;
+  };
+
+  const formatTimelineTime = timestamp => {
+    if (!timestamp) return "—";
+    return new Date(timestamp).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
+
+  const normalizedExtensionOpenTrades = (() => {
+    const seen = new Set();
+    return Object.values(extensionOpenPositions || {})
+      .filter(pos => {
+        const key = pos?.positionId || pos?.contractAddress || pos?.tokenName;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  })();
+
+  const reconciliationSummary = (() => {
+    const backendByKey = new Map();
+    openTrades.forEach(pos => {
+      const key = pos.contractAddress || pos.tokenName;
+      if (!key) return;
+      backendByKey.set(key, pos);
+    });
+    const extensionByKey = new Map();
+    normalizedExtensionOpenTrades.forEach(pos => {
+      const key = pos.contractAddress || pos.tokenName;
+      if (!key) return;
+      extensionByKey.set(key, pos);
+    });
+
+    const mismatches = [];
+    const keys = new Set([...backendByKey.keys(), ...extensionByKey.keys()]);
+    keys.forEach(key => {
+      const backend = backendByKey.get(key) || null;
+      const extension = extensionByKey.get(key) || null;
+      if (!backend) {
+        mismatches.push({ key, tokenName: extension?.tokenName || key, issue: "Only in extension" });
+        return;
+      }
+      if (!extension) {
+        mismatches.push({ key, tokenName: backend?.tokenName || key, issue: "Only in dashboard" });
+        return;
+      }
+      const sizeDiff = Math.abs(Number(backend.positionSizeSol || 0) - Number(extension.positionSizeSol || 0));
+      const entryDiff = Math.abs(Number(backend.entryMarketCap || 0) - Number(extension.entryMarketCap || 0));
+      if (sizeDiff > 0.0001) {
+        mismatches.push({ key, tokenName: backend.tokenName || extension.tokenName || key, issue: `Size mismatch (${backend.positionSizeSol?.toFixed?.(4) || backend.positionSizeSol} vs ${extension.positionSizeSol?.toFixed?.(4) || extension.positionSizeSol})` });
+      } else if (entryDiff > 1) {
+        mismatches.push({ key, tokenName: backend.tokenName || extension.tokenName || key, issue: `Entry MC mismatch (${formatAuditMc(backend.entryMarketCap)} vs ${formatAuditMc(extension.entryMarketCap)})` });
+      }
+    });
+
+    return {
+      backendCount: openTrades.length,
+      extensionCount: normalizedExtensionOpenTrades.length,
+      mismatches,
+      ok: mismatches.length === 0 && openTrades.length === normalizedExtensionOpenTrades.length,
+    };
+  })();
+
   const allTrades = sessions.flatMap(s => s.tradeList || []);
   const allTimeNet = sessions.reduce((a, s) => a + netPnl(s), 0);
 
@@ -744,6 +946,33 @@ export default function App() {
 
   // ── Session detail derived ─────────────────────────────────────────────────
   const modalTrades = modal?.tradeList || [];
+  const OPEN_NOTE_PREFIX = "__TD_OPEN__";
+  const completedModalTrades = modalTrades.filter(t => !String(t.notes || "").startsWith(OPEN_NOTE_PREFIX));
+  // Group completed trades by instrument — multiple buys/partial-sells on the same token = one position row
+  const displayTradeGroups = (() => {
+    const groups = {};
+    completedModalTrades.forEach(t => {
+      const key = t.instrument || "—";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
+    });
+    return Object.values(groups).map(trades => {
+      const totalPnl  = trades.reduce((s, t) => s + parseFloat(t.pnl || 0), 0);
+      const totalNet  = trades.reduce((s, t) => s + tradeNet(t), 0);
+      const allViols  = trades.flatMap(t => checkTrade(t));
+      const firstEntryMC = trades[0]?.entryMC || 0;
+      const lastExitMC   = trades[trades.length - 1]?.exitMC || 0;
+      // Weighted-average % across all closes: sum(pnl) / sum(impliedSize)
+      let totalImplied = 0;
+      trades.forEach(t => {
+        const pct = parseFloat(t.pnlPct || 0);
+        const pnl = parseFloat(t.pnl || 0);
+        if (Math.abs(pct) > 0.001) totalImplied += pnl / (pct / 100);
+      });
+      const avgPct = Math.abs(totalImplied) > 1e-9 ? (totalPnl / totalImplied) * 100 : null;
+      return { instrument: trades[0]?.instrument || "—", trades, totalPnl, totalNet, firstEntryMC, lastExitMC, allViols, avgPct };
+    });
+  })();
   const modalNet = modal ? netPnl(modal) : 0;
   const modalFees = modalTrades.length * FEE_PER_TRADE;
   const modalGross = modalTrades.reduce((a, t) => a + parseFloat(t.pnl), 0);
@@ -905,27 +1134,34 @@ export default function App() {
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {modalTrades.map((tr, i) => {
-            const tnet = tradeNet(tr);
-            const viols = checkTrade(tr);
+          {displayTradeGroups.map((group, i) => {
+            const { instrument, trades, totalPnl, totalNet, firstEntryMC, lastExitMC, allViols, avgPct } = group;
+            const merged = trades.length > 1;
+            const notes = !merged ? (trades[0]?.notes || "") : "";
+            const closeMeta = !merged ? (trades[0]?.closeMeta || null) : null;
             return (
-              <div key={tr.id || i} style={{ ...quietPanel, borderRadius: 14, padding: "14px 14px 13px", borderLeft: `4px solid ${fmtColor(tnet)}` }}>
+              <div key={instrument + i} style={{ ...quietPanel, borderRadius: 14, padding: "14px 14px 13px", borderLeft: `4px solid ${fmtColor(totalNet)}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: tk.text }}>{tr.instrument || "—"}</span>
-                      {viols.length > 0 && <span style={{ fontSize: 10, color: accentDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Violation</span>}
+                      <span style={{ fontSize: 15, fontWeight: 700, color: tk.text }}>{instrument}</span>
+                      {merged && <span style={{ fontSize: 10, color: tk.textDim, letterSpacing: "0.06em" }}>{trades.length} CLOSES</span>}
+                      {closeMeta?.trigger && closeMeta.trigger !== "manual" && <span style={{ fontSize: 10, color: green, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{closeMeta.trigger.replaceAll("_", " ")}</span>}
+                      {allViols.length > 0 && <span style={{ fontSize: 10, color: accentDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Violation</span>}
                     </div>
-                    {tr.entryMC > 0 && <div style={{ marginTop: 10, fontSize: 11, color: tk.textDim }}>MC ${tr.entryMC.toLocaleString()} → ${tr.exitMC.toLocaleString()}</div>}
-                    {tr.notes && <div style={{ marginTop: 8, fontSize: 12, color: tk.textMid, lineHeight: 1.55 }}>{tr.notes}</div>}
-                    {viols.map((v, j) => <div key={j} style={{ fontSize: 11, color: `${accent}77`, marginTop: 6, lineHeight: 1.5 }}>{v.rule}: {v.detail}</div>)}
+                    {firstEntryMC > 0 && <div style={{ marginTop: 10, fontSize: 11, color: tk.textDim }}>MC ${firstEntryMC.toLocaleString()} → ${lastExitMC.toLocaleString()}</div>}
+                    {notes && <div style={{ marginTop: 8, fontSize: 12, color: tk.textMid, lineHeight: 1.55 }}>{notes}</div>}
+                    {allViols.map((v, j) => <div key={j} style={{ fontSize: 11, color: `${accent}77`, marginTop: 6, lineHeight: 1.5 }}>{v.rule}: {v.detail}</div>)}
                   </div>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexShrink: 0 }}>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: fmtColor(tnet), whiteSpace: "nowrap" }}>{fmtUsd(tnet)}</div>
-                      {tr.pnlPct !== 0 && <div style={{ fontSize: 11, color: fmtColor(tr.pnlPct), marginTop: 4 }}>{fmtPct(tr.pnlPct)}</div>}
+                      <div style={{ fontSize: 13, fontWeight: 700, color: fmtColor(totalNet), whiteSpace: "nowrap" }}>{fmtUsd(totalNet)}</div>
+                      {avgPct !== null && <div style={{ fontSize: 11, color: fmtColor(avgPct), marginTop: 4 }}>{fmtPct(avgPct)}</div>}
                     </div>
-                    <button onClick={() => deleteTrade(tr.id)} style={{ background: tk.surface3, border: "none", borderRadius: 999, cursor: "pointer", color: tk.textDim, fontSize: 12, width: 28, height: 28, display: "grid", placeItems: "center", fontFamily: sans, flexShrink: 0 }}>✕</button>
+                    <button
+                      onClick={async () => { for (const t of trades) await deleteTrade(t.id); }}
+                      style={{ background: tk.surface3, border: "none", borderRadius: 999, cursor: "pointer", color: tk.textDim, fontSize: 12, width: 28, height: 28, display: "grid", placeItems: "center", fontFamily: sans, flexShrink: 0 }}
+                    >✕</button>
                   </div>
                 </div>
               </div>
@@ -945,6 +1181,7 @@ export default function App() {
           {syncBadge}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginLeft: "auto" }}>
+          {currencyToggle}
           <button
             className="clickable-text"
             onClick={() => setCurrentMonth(p => { const d = new Date(p.y, p.m - 1); return { y: d.getFullYear(), m: d.getMonth() }; })}
@@ -1164,25 +1401,85 @@ export default function App() {
   const insightRail = (
     <aside style={{ display: "flex", flexDirection: "column", gap: 0, height: isDesktop ? "100%" : "auto", overflowY: isDesktop ? "auto" : "visible", paddingRight: isDesktop ? 0 : 0, borderLeft: isDesktop ? `1px solid ${tk.border}` : "none", background: railSectionBg }}>
 
-      {openTrades.length > 0 && (
+      {(openTrades.length > 0 || normalizedExtensionOpenTrades.length > 0) && (
         <div style={{ padding: sectionPad, borderBottom: `1px solid ${tk.borderSub}` }}>
           <div style={{ ...labelStyle, marginBottom: 8 }}>Live positions</div>
+          <div style={{ ...quietPanel, padding: "9px 10px", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: reconciliationSummary.ok ? green : tk.text }}>Sync health</div>
+              <div style={{ fontSize: 11, color: reconciliationSummary.ok ? green : red, fontWeight: 700 }}>
+                {reconciliationSummary.ok ? "Reconciled" : "Needs review"}
+              </div>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 11, color: tk.textDim, lineHeight: 1.6 }}>
+              dashboard {reconciliationSummary.backendCount} · extension {reconciliationSummary.extensionCount}
+            </div>
+            {reconciliationSummary.mismatches.length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
+                {reconciliationSummary.mismatches.slice(0, 4).map(item => (
+                  <div key={item.key + item.issue} style={{ fontSize: 11, color: red, lineHeight: 1.45 }}>
+                    {item.tokenName}: {item.issue}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {openTrades.map(pos => {
               const entryMC = pos.entryMarketCap;
               const sizeSol = pos.positionSizeSol;
               const sizeUsd = solPrice ? sizeSol * solPrice : null;
+              const events = Array.isArray(pos.events) ? [...pos.events].sort((a, b) => Number(b.at || 0) - Number(a.at || 0)) : [];
+              const extMatch = normalizedExtensionOpenTrades.find(item => (item.contractAddress || item.tokenName) === (pos.contractAddress || pos.tokenName));
+              const entryCapture = pos.entryCapture || null;
+              const lastCapture = pos.lastCapture || null;
+              const cardSyncOk = extMatch && Math.abs(Number(extMatch.positionSizeSol || 0) - Number(pos.positionSizeSol || 0)) <= 0.0001;
               return (
-                <div key={pos.positionId} style={{ ...quietPanel, padding: "8px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>{pos.tokenName}</div>
-                    <div style={{ fontSize: 11, color: tk.textDim, marginTop: 2 }}>
-                      entry {entryMC >= 1e6 ? `$${(entryMC / 1e6).toFixed(2)}M` : entryMC >= 1e3 ? `$${(entryMC / 1e3).toFixed(0)}K` : `$${entryMC.toFixed(0)}`}
+                <div key={pos.positionId} style={{ ...quietPanel, padding: "10px 10px 11px" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>{pos.tokenName}</div>
+                      <div style={{ fontSize: 11, color: tk.textDim, marginTop: 2 }}>
+                        entry {formatAuditMc(entryMC)}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: tk.textMid, whiteSpace: "nowrap" }}>
+                      {sizeUsd !== null ? `$${sizeUsd.toFixed(2)}` : `${sizeSol.toFixed(3)} SOL`}
                     </div>
                   </div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: tk.textMid, whiteSpace: "nowrap" }}>
-                    {sizeUsd !== null ? `$${sizeUsd.toFixed(2)}` : `${sizeSol.toFixed(3)} SOL`}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 10 }}>
+                    <div style={{ ...quietPanel, padding: "8px 9px" }}>
+                      <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Capture</div>
+                      <div style={{ fontSize: 11, color: tk.text, lineHeight: 1.45 }}>{entryCapture?.marketCapSource || pos.marketCapSource || "unknown"}</div>
+                      <div style={{ fontSize: 10, color: tk.textDim, marginTop: 4 }}>{formatTimelineTime(entryCapture?.capturedAt || pos.openedAt)}</div>
+                    </div>
+                    <div style={{ ...quietPanel, padding: "8px 9px" }}>
+                      <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Protection</div>
+                      <div style={{ fontSize: 11, color: tk.text, lineHeight: 1.45 }}>
+                        SL {pos.stopLossPct ? `${Math.abs(pos.stopLossPct).toFixed(1)}%` : "—"} · TP {pos.targetSellPct ? `${pos.targetSellPct.toFixed(1)}%` : "—"}
+                      </div>
+                    </div>
                   </div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: cardSyncOk ? green : tk.textDim, lineHeight: 1.5 }}>
+                    {cardSyncOk ? "Extension and dashboard position match" : extMatch ? "Extension copy differs from dashboard" : "No extension-side open position found"}
+                  </div>
+                  {lastCapture?.marketCapText && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: tk.textMid, lineHeight: 1.5 }}>
+                      Saw on page: {lastCapture.marketCapText}
+                    </div>
+                  )}
+                  {events.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Activity</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {events.slice(0, 5).map(event => (
+                          <div key={event.id || `${event.type}_${event.at}`} style={{ fontSize: 11, color: tk.textMid, lineHeight: 1.5 }}>
+                            {formatTimelineTime(event.at)} · {event.type.replaceAll("_", " ")} · {formatAuditMc(event.marketCap)}{event.sizeSol ? ` · ${Number(event.sizeSol).toFixed(3)} SOL` : ""}{event.trigger && event.trigger !== "manual" ? ` · ${event.trigger}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1266,16 +1563,16 @@ export default function App() {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-          {sessions.length > 0 ? missionStats.items.filter(item => !item.done).slice(0, 3).map(item => (
+          {sessions.length > 0 ? missionStats.items.map(item => (
             <div key={item.label} style={{ padding: "4px 0 8px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: tk.text }}>{item.label}</span>
-                <span style={{ fontSize: 11, color: tk.textDim }}>{Math.round(item.progress * 100)}%</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: item.done ? green : tk.text }}>{item.label}</span>
+                <span style={{ fontSize: 11, color: item.done ? green : tk.textDim }}>{item.done ? "✓" : Math.round(item.progress * 100) + "%"}</span>
               </div>
               <div style={{ height: 5, background: tk.border, borderRadius: 999, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${Math.round(item.progress * 100)}%`, background: accent, borderRadius: 999 }} />
+                <div style={{ height: "100%", width: `${Math.round(item.progress * 100)}%`, background: item.done ? green : accent, borderRadius: 999 }} />
               </div>
-              <div style={{ fontSize: 11, color: tk.textMid, marginTop: 7 }}>{item.value}</div>
+              <div style={{ fontSize: 11, color: item.done ? green : tk.textMid, marginTop: 7 }}>{item.value}</div>
             </div>
           )) : (
             <div style={{ padding: "4px 0 8px", color: tk.textMid, fontSize: 12, lineHeight: 1.6 }}>
@@ -1550,63 +1847,111 @@ export default function App() {
     </div>
   ) : null;
 
+  // ── Settings panel ────────────────────────────────────────────────────────
+  const settingsPanel = settingsPanelOpen && (
+    <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 216, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: "14px 14px 12px", zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
+        <div style={{ display: "flex", gap: 7 }}>
+          {ACCENT_PRESETS.map(p => (
+            <button key={p.key} title={p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ width: 24, height: 24, borderRadius: "50%", background: p.base, border: accentKey === p.key ? `2.5px solid ${tk.text}` : "2.5px solid transparent", outline: "none", cursor: "pointer", padding: 0, flexShrink: 0, boxShadow: accentKey === p.key ? `0 0 0 3px ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"}` : "none" }} />
+          ))}
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Virtual balance</div>
+        <div style={{ fontSize: 14, color: tk.text, fontWeight: 700, marginBottom: 8 }}>{virtualBalance.toFixed(2)} SOL</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 7 }}>
+          <input type="number" min="0" step="0.1" placeholder="Add SOL" value={balanceInputVal} onChange={e => setBalanceInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { const v = Number(balanceInputVal); if (v > 0) { syncVirtualBalance(virtualBalance + v); setBalanceInputVal(""); } } }} style={{ flex: 1, background: tk.inp.bg, border: `1px solid ${tk.inp.border}`, color: tk.inp.color, borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: sans, outline: "none", minWidth: 0 }} />
+          <button onClick={() => { const v = Number(balanceInputVal); if (v > 0) { syncVirtualBalance(virtualBalance + v); setBalanceInputVal(""); } }} style={{ background: `${accent}18`, border: `1px solid ${accent}44`, color: accent, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 600, fontFamily: sans, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>Add</button>
+        </div>
+        <button onClick={resetVirtualBalance} style={{ background: "none", border: "none", color: red, fontSize: 11, fontFamily: sans, cursor: "pointer", padding: 0, opacity: 0.7, display: "block" }} onMouseEnter={e => e.currentTarget.style.opacity = "1"} onMouseLeave={e => e.currentTarget.style.opacity = "0.7"}>Reset balance</button>
+      </div>
+    </div>
+  );
+  const settingsIconBtn = (
+    <div ref={settingsWrapperRef} style={{ position: "relative" }}>
+      <button onClick={() => setSettingsPanelOpen(v => !v)} aria-label="Settings" style={{ ...headerButton, padding: "5px 7px", color: settingsPanelOpen ? accent : tk.textDim, display: "flex", alignItems: "center" }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+      </button>
+      {settingsPanel}
+    </div>
+  );
+  const profileMenu = !isLocalMode && profileMenuOpen ? (
+    <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, minWidth: 140, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.24)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 6, zIndex: 220, display: "flex", flexDirection: "column" }}>
+      <button
+        onClick={() => {
+          setProfileMenuOpen(false);
+          handleSignOut();
+        }}
+        style={{ background: "transparent", border: "none", borderRadius: 8, color: tk.text, cursor: "pointer", fontFamily: sans, fontSize: 12, fontWeight: 600, padding: "10px 12px", textAlign: "left" }}
+      >
+        Sign out
+      </button>
+    </div>
+  ) : null;
+  const profileTrigger = (
+    <div ref={profileMenuRef} style={{ position: "relative", minWidth: 0 }}>
+      <button
+        type="button"
+        onClick={() => {
+          if (isLocalMode) return;
+          setProfileMenuOpen(v => !v);
+        }}
+        aria-label={isLocalMode ? "User profile" : "User profile menu"}
+        aria-haspopup={isLocalMode ? undefined : "menu"}
+        aria-expanded={isLocalMode ? undefined : profileMenuOpen}
+        style={{
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          margin: 0,
+          color: "inherit",
+          cursor: isLocalMode ? "default" : "pointer",
+          minWidth: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: tk.textDim, flexShrink: 0 }}><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/></svg>
+        <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: isLocalMode ? "default" : "pointer", minWidth: 0 }}>{currentUserLabel}</span>
+        {streakBadge}
+      </button>
+      {profileMenu}
+    </div>
+  );
+  const headerPnl = (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", flexShrink: 0 }}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}><path fillRule="evenodd" clipRule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solGradH)"/><defs><linearGradient id="solGradH" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stopColor="#9945FF"/><stop offset="0.24" stopColor="#8752F3"/><stop offset="0.465" stopColor="#5497D5"/><stop offset="0.6" stopColor="#43B4CA"/><stop offset="0.735" stopColor="#28E0B9"/><stop offset="1" stopColor="#19FB9B"/></linearGradient></defs></svg>
+      <span style={{ color: tk.text, fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em" }}>{virtualBalance.toFixed(2)} SOL</span>
+    </div>
+  );
+
   // ── Header ─────────────────────────────────────────────────────────────────
   const appHeader = (
-    <header style={{ borderBottom: `1px solid ${tk.border}`, position: "sticky", top: 0, background: dark ? "rgba(6,7,10,0.92)" : "rgba(247,247,245,0.86)", backdropFilter: "blur(18px)", zIndex: 100, fontFamily: sans }}>
+    <header style={{ borderBottom: `1px solid ${tk.border}`, position: "sticky", top: 0, background: tk.modalBg, backdropFilter: "blur(18px)", zIndex: 100, fontFamily: sans }}>
       <div style={{ height: isDesktop ? 54 : 56, maxWidth: 1180, margin: "0 auto", padding: isDesktop ? "0 22px" : "0 14px" }}>
         {isDesktop ? (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", height: "100%", alignItems: "stretch" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, minWidth: 0, padding: `0 ${sectionPad}px` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "default" }}>{currentUserLabel}</span>
-                {streakBadge}
-              </div>
-              {currencyToggle}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, padding: `0 ${sectionPad}px` }}>
+              {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0, borderLeft: `1px solid ${tk.border}`, padding: `0 ${sectionPad}px` }}>
-              {sessions.length > 0 ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, whiteSpace: "nowrap" }}>
-                  <span style={{ fontSize: 11, color: tk.textDim, fontWeight: 600 }}>All-time P/L</span>
-                  <span style={{ color: fmtColor(allTimeNet), fontSize: 12, fontWeight: 700 }}>{fmtHeaderPnl(allTimeNet)}</span>
-                </div>
-              ) : <div />}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton }}>Invites</button>}
-                {!isLocalMode && <button onClick={handleSignOut} style={{ ...headerButton }}>Sign out</button>}
-              </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, borderLeft: `1px solid ${tk.border}`, padding: `0 ${sectionPad}px`, minWidth: 0 }}>
+              {settingsIconBtn}
+              {headerPnl}
+              {profileTrigger}
             </div>
           </div>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, height: "100%" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, paddingLeft: 18 }}>
-                <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "default" }}>{currentUserLabel}</span>
-                {streakBadge}
-              </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, height: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-              {sessions.length > 0 && (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
-                    <span style={{ fontSize: 11, color: tk.textDim, fontWeight: 600 }}>All-time P/L</span>
-                    <span style={{ color: fmtColor(allTimeNet), fontSize: 12, fontWeight: 700 }}>{fmtHeaderPnl(allTimeNet)}</span>
-                  </div>
-                  <div style={{ width: 1, height: 22, background: tk.border }} />
-                </>
-              )}
-              {currencyToggle}
-              {isAdmin && (
-                <>
-                  <div style={{ width: 1, height: 22, background: tk.border }} />
-                  <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton }}>Invites</button>
-                </>
-              )}
-              {!isLocalMode && (
-                <>
-                  <div style={{ width: 1, height: 22, background: tk.border }} />
-                  <button onClick={handleSignOut} style={{ ...headerButton }}>Sign out</button>
-                </>
-              )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minWidth: 0 }}>
+              {settingsIconBtn}
+              {headerPnl}
+              {profileTrigger}
             </div>
           </div>
         )}
