@@ -15,6 +15,7 @@
   const OPEN_TRADE_NOTE_PREFIX = "__TD_OPEN__";
   const CLOSE_TRADE_NOTE_PREFIX = "__TD_CLOSE__";
   const MAX_POSITION_EVENTS = 12;
+  const FEE_PER_TRADE = 0.01;
   const BUY_PRESETS = [0.1, 0.2, 0.4, 1];
   const SELL_PRESETS = [10, 25, 50, 100];
 
@@ -691,17 +692,35 @@
       }
     ));
 
-    const nextPositions = {};
+    const existingPositions = state.openPositions && typeof state.openPositions === "object" ? state.openPositions : {};
+    const nextPositions = { ...existingPositions };
+    const backendKeys = new Set();
     (Array.isArray(rows) ? rows : []).forEach(row => {
       const parsed = parseOpenTradeNote(row.notes, row);
       if (!parsed) return;
       const positionKey = getPositionKey(parsed);
-      if (nextPositions[positionKey]) return;
+      if (!positionKey) return;
+      backendKeys.add(positionKey);
       nextPositions[positionKey] = {
+        ...(nextPositions[positionKey] || {}),
         ...parsed,
         backendTradeId: row.id,
       };
     });
+
+    for (const [positionKey, position] of Object.entries(existingPositions)) {
+      if (!position?.positionId) continue;
+      if (backendKeys.has(positionKey) && position.backendTradeId) continue;
+      try {
+        const backendTradeId = await persistOpenPosition(position);
+        nextPositions[positionKey] = {
+          ...position,
+          backendTradeId,
+        };
+      } catch (error) {
+        console.error("Failed to backfill live position to backend", position?.tokenName || positionKey, error);
+      }
+    }
 
     state.openPositions = nextPositions;
     await saveOpenPositions();
@@ -817,14 +836,20 @@
     const livePnlPct = getCurrentLivePnlPct(current);
     if (livePnlPct === null) return;
 
-    const stopLossPct = Number(current.stopLossPct);
-    if (Number.isFinite(stopLossPct) && livePnlPct <= stopLossPct) {
+    const rawStopLossPct = current.stopLossPct;
+    const stopLossPct = rawStopLossPct === null || rawStopLossPct === undefined || rawStopLossPct === ""
+      ? null
+      : Number(rawStopLossPct);
+    if (Number.isFinite(stopLossPct) && stopLossPct < 0 && livePnlPct <= stopLossPct) {
       await closeTrade(1, { trigger: "stop_loss", reason, snapshot: state.detected });
       return;
     }
 
-    const targetSellPct = Number(current.targetSellPct);
-    if (Number.isFinite(targetSellPct) && livePnlPct >= targetSellPct) {
+    const rawTargetSellPct = current.targetSellPct;
+    const targetSellPct = rawTargetSellPct === null || rawTargetSellPct === undefined || rawTargetSellPct === ""
+      ? null
+      : Number(rawTargetSellPct);
+    if (Number.isFinite(targetSellPct) && targetSellPct > 0 && livePnlPct >= targetSellPct) {
       await closeTrade(1, { trigger: "target_sell", reason, snapshot: state.detected });
     }
   }
@@ -1018,7 +1043,7 @@
             <button class="td-overlay-balance" type="button" data-open-balance style="display:flex;align-items:center;gap:5px">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path fill-rule="evenodd" clip-rule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solG)"/><defs><linearGradient id="solG" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stop-color="#9945FF"/><stop offset="0.24" stop-color="#8752F3"/><stop offset="0.465" stop-color="#5497D5"/><stop offset="0.6" stop-color="#43B4CA"/><stop offset="0.735" stop-color="#28E0B9"/><stop offset="1" stop-color="#19FB9B"/></linearGradient></defs></svg>
               ${solBalanceLabel}
-              <span class="td-overlay-balance-tip">manage SOL in dashboard</span>
+              <span class="td-overlay-balance-tip">Add more SOL</span>
             </button>
             <div class="td-overlay-head-actions">
               <button class="td-overlay-icon-btn td-overlay-icon-btn-settings" type="button" data-open-settings aria-label="Account settings">${personIcon}</button>
@@ -1069,7 +1094,14 @@
               })()}
               <div class="td-overlay-label">Buy</div>
               <div class="td-overlay-preset-grid">
-                ${BUY_PRESETS.map(value => `<button class="td-overlay-preset" type="button" data-buy="${value}" ${state.virtualBalance < value ? "disabled" : ""}>${value} SOL</button>`).join("")}
+                ${BUY_PRESETS.map(value => {
+                  const totalRequired = Number((value + FEE_PER_TRADE).toFixed(4));
+                  const disabled = state.virtualBalance < totalRequired;
+                  const button = `<button class="td-overlay-preset" type="button" data-buy="${value}" ${disabled ? "disabled" : ""}>${value} SOL</button>`;
+                  return disabled
+                    ? `<span class="td-overlay-disabled-hint" data-hint="Need ${totalRequired.toFixed(2)} SOL including fee">${button}</span>`
+                    : button;
+                }).join("")}
               </div>
 
               <div class="td-overlay-label">Sell</div>
@@ -1144,6 +1176,10 @@
         state.tradeBusy = true;
         try {
           const size = Number(button.dataset.buy || 0);
+          const totalRequired = Number((size + FEE_PER_TRADE).toFixed(4));
+          if (state.virtualBalance < totalRequired) {
+            throw new Error(`Need ${totalRequired.toFixed(2)} SOL to cover size and fee.`);
+          }
           const snapshot = detectPageSnapshot();
           state.detected = snapshot;
           if (!snapshot.marketCap) {
@@ -1152,14 +1188,19 @@
           const positionKey = getPositionKey(snapshot);
           const current = state.openPositions[positionKey] || state.openPositions[snapshot.tokenName] || null;
           const nextPosition = upsertCurrentPosition(current, size, snapshot);
-          const backendTradeId = await persistOpenPosition(nextPosition);
-
           state.openPositions[positionKey] = {
             ...nextPosition,
-            backendTradeId,
+            backendTradeId: nextPosition.backendTradeId || null,
           };
+          await saveOpenPositions();
           state.virtualBalance = Number(Math.max(0, state.virtualBalance - size).toFixed(4));
           await saveVirtualBalance();
+
+          const backendTradeId = await persistOpenPosition(state.openPositions[positionKey]);
+          state.openPositions[positionKey] = {
+            ...state.openPositions[positionKey],
+            backendTradeId,
+          };
           await saveOpenPositions();
           setStatus(`Position synced: ${state.openPositions[positionKey].positionSizeSol.toFixed(2)} SOL`, "good");
         } catch (error) {

@@ -2,16 +2,40 @@
 (function () {
   const config = window.POSTURE_EXTENSION_CONFIG;
   if (!config?.supabaseUrl) return;
+  const BALANCE_KEY = "td_virtual_balance";
+  const OPEN_POSITIONS_KEY = "td_open_positions";
 
   // sb-<projectRef>-auth-token is the key Supabase JS client uses in localStorage
   const projectRef = config.supabaseUrl.replace(/^https?:\/\//, "").split(".")[0];
   const lsKey = `sb-${projectRef}-auth-token`;
 
+  const broadcastBalance = value => {
+    window.postMessage({
+      source: "posture-bridge",
+      type: "inject_balance",
+      value: value ?? null,
+    }, "*");
+  };
+
+  const loadAndBroadcastBalance = () => {
+    chrome.storage.local.get([BALANCE_KEY], result => {
+      const balance = result[BALANCE_KEY];
+      try {
+        if (balance === undefined || balance === null) {
+          localStorage.removeItem("posture_virtual_balance");
+        } else {
+          localStorage.setItem("posture_virtual_balance", String(balance));
+        }
+      } catch (_) {}
+      broadcastBalance(balance);
+    });
+  };
+
   // Extension → Dashboard: inject session and balance before the app reads localStorage
-  chrome.storage.local.get(["td_session", "td_virtual_balance", "td_open_positions"], result => {
+  chrome.storage.local.get(["td_session", BALANCE_KEY, OPEN_POSITIONS_KEY], result => {
     const session = result.td_session;
-    const balance = result.td_virtual_balance;
-    const openPositions = result.td_open_positions;
+    const balance = result[BALANCE_KEY];
+    const openPositions = result[OPEN_POSITIONS_KEY];
     if (session?.access_token) {
       try {
         if (!localStorage.getItem(lsKey)) {
@@ -66,20 +90,23 @@
         chrome.storage.local.remove("td_session");
       }
     }
+    if (e.data.type === "request_balance") {
+      loadAndBroadcastBalance();
+    }
     if (e.data.type === "reset_balance") {
-      chrome.storage.local.remove("td_virtual_balance");
+      chrome.storage.local.set({ [BALANCE_KEY]: 0 }, () => loadAndBroadcastBalance());
     }
     if (e.data.type === "balance_update") {
       const value = Number(e.data.value);
       if (Number.isFinite(value) && value >= 0) {
-        chrome.storage.local.set({ td_virtual_balance: Number(value.toFixed(4)) });
+        chrome.storage.local.set({ [BALANCE_KEY]: Number(value.toFixed(4)) }, () => loadAndBroadcastBalance());
       }
     }
   });
 
   chrome.storage.onChanged.addListener(changes => {
-    if (changes.td_virtual_balance) {
-      const next = changes.td_virtual_balance.newValue;
+    if (changes[BALANCE_KEY]) {
+      const next = changes[BALANCE_KEY].newValue;
       try {
         if (next === undefined || next === null) {
           localStorage.removeItem("posture_virtual_balance");
@@ -87,14 +114,10 @@
           localStorage.setItem("posture_virtual_balance", String(next));
         }
       } catch (_) {}
-      window.postMessage({
-        source: "posture-bridge",
-        type: "inject_balance",
-        value: next ?? null,
-      }, "*");
+      broadcastBalance(next);
     }
-    if (changes.td_open_positions) {
-      const nextOpenPositions = changes.td_open_positions.newValue || {};
+    if (changes[OPEN_POSITIONS_KEY]) {
+      const nextOpenPositions = changes[OPEN_POSITIONS_KEY].newValue || {};
       try {
         localStorage.setItem("posture_extension_open_positions", JSON.stringify(nextOpenPositions));
       } catch (_) {}

@@ -251,6 +251,38 @@
   gap: 4px;
 }
 
+.td-overlay-disabled-hint {
+  position: relative;
+  display: block;
+}
+
+.td-overlay-disabled-hint::after {
+  content: attr(data-hint);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%) translateY(4px);
+  background: var(--td-bg);
+  border: 1px solid var(--td-border);
+  border-radius: 6px;
+  box-shadow: var(--td-menu-shadow);
+  color: var(--td-text-mid);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 6px 8px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+  z-index: 20;
+}
+
+.td-overlay-disabled-hint:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .td-overlay-preset {
   border: 1px solid rgba(80, 255, 108, 0.25);
   background: rgba(80, 255, 108, 0.06);
