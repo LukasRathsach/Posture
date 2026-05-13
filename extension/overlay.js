@@ -39,7 +39,6 @@
     livePairPriceNative: null,
     virtualBalance: 0,
     settingsOpen: false,
-    balancePanelOpen: false,
     posNavOpen: false,
     bgPrice: null,
     darkTheme: true,
@@ -128,6 +127,27 @@
   function setStatus(message, tone) {
     state.status = message || "";
     state.statusTone = tone || "neutral";
+  }
+
+  function getDashboardBalanceUrl() {
+    try {
+      const url = new URL(config.dashboardUrl);
+      url.searchParams.set("modal", "balance");
+      return url.toString();
+    } catch {
+      return config.dashboardUrl;
+    }
+  }
+
+  function openDashboardBalanceModal() {
+    const url = getDashboardBalanceUrl();
+    if (chrome?.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({ type: "td_open_dashboard_balance", url }, () => {
+        void chrome.runtime?.lastError;
+      });
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   function request(path, options) {
@@ -998,22 +1018,12 @@
             <button class="td-overlay-balance" type="button" data-open-balance style="display:flex;align-items:center;gap:5px">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path fill-rule="evenodd" clip-rule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solG)"/><defs><linearGradient id="solG" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stop-color="#9945FF"/><stop offset="0.24" stop-color="#8752F3"/><stop offset="0.465" stop-color="#5497D5"/><stop offset="0.6" stop-color="#43B4CA"/><stop offset="0.735" stop-color="#28E0B9"/><stop offset="1" stop-color="#19FB9B"/></linearGradient></defs></svg>
               ${solBalanceLabel}
-              <span class="td-overlay-balance-tip">need more SOL? add here</span>
+              <span class="td-overlay-balance-tip">manage SOL in dashboard</span>
             </button>
             <div class="td-overlay-head-actions">
               <button class="td-overlay-icon-btn td-overlay-icon-btn-settings" type="button" data-open-settings aria-label="Account settings">${personIcon}</button>
             </div>
           </div>
-
-          ${state.balancePanelOpen ? `
-            <div class="td-overlay-balance-panel">
-              <div class="td-overlay-balance-row">
-                <input class="td-overlay-input td-overlay-balance-input" type="number" min="0" step="0.1" placeholder="SOL amount" data-balance-input />
-                <button class="td-overlay-inline-btn td-overlay-balance-confirm" type="button" data-balance-set>Set</button>
-              </div>
-              <button class="td-overlay-balance-reset" type="button" data-balance-reset>Reset balance</button>
-            </div>
-          ` : ""}
 
           ${state.settingsOpen ? `
             <div class="td-overlay-settings-panel">
@@ -1085,50 +1095,14 @@
     });
 
     root.querySelectorAll("[data-open-balance]").forEach(el => el.addEventListener("click", () => {
-      state.balancePanelOpen = !state.balancePanelOpen;
-      if (state.balancePanelOpen) state.settingsOpen = false;
-      render();
-      setTimeout(() => root.querySelector("[data-balance-input]")?.focus(), 0);
+      openDashboardBalanceModal();
     }));
 
     root.querySelectorAll("[data-open-settings]").forEach(el => el.addEventListener("click", () => {
       if (!state.user) return;
       state.settingsOpen = !state.settingsOpen;
-      if (state.settingsOpen) state.balancePanelOpen = false;
       render();
     }));
-
-    root.querySelector("[data-balance-set]")?.addEventListener("click", async () => {
-      const val = Number(root.querySelector("[data-balance-input]")?.value || 0);
-      if (val > 0) {
-        state.virtualBalance = Number(val.toFixed(4));
-        await saveVirtualBalance();
-      }
-      state.balancePanelOpen = false;
-      render();
-    });
-
-    root.querySelector("[data-balance-reset]")?.addEventListener("click", async () => {
-      state.virtualBalance = 0;
-      await saveVirtualBalance();
-      state.balancePanelOpen = false;
-      render();
-    });
-
-    root.querySelector("[data-balance-input]")?.addEventListener("keydown", async e => {
-      if (e.key === "Enter") {
-        const val = Number(e.target.value || 0);
-        if (val > 0) {
-          state.virtualBalance = Number(val.toFixed(4));
-          await saveVirtualBalance();
-        }
-        state.balancePanelOpen = false;
-        render();
-      } else if (e.key === "Escape") {
-        state.balancePanelOpen = false;
-        render();
-      }
-    });
 
     root.querySelector("[data-sign-out]")?.addEventListener("click", async () => {
       await signOutCurrentUser();
@@ -1436,6 +1410,10 @@
       }
       if (changes[BG_PRICE_KEY]) {
         state.bgPrice = changes[BG_PRICE_KEY].newValue || null;
+        render();
+      }
+      if (changes[VIRTUAL_BALANCE_KEY]) {
+        state.virtualBalance = Number(changes[VIRTUAL_BALANCE_KEY].newValue || 0);
         render();
       }
       if (changes[OVERLAY_DARK_THEME_KEY]) {

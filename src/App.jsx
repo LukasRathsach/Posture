@@ -87,11 +87,11 @@ export default function App() {
 
   // ── Settings panel ─────────────────────────────────────────────────────────
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [virtualBalance, setVirtualBalance] = useState(() => Number(localStorage.getItem("posture_virtual_balance") || "0"));
   const [balanceInputVal, setBalanceInputVal] = useState("");
+  const [balanceModalOpen, setBalanceModalOpen] = useState(false);
+  const [balanceHover, setBalanceHover] = useState(false);
   const settingsWrapperRef = useRef(null);
-  const profileMenuRef = useRef(null);
 
   const syncVirtualBalance = nextValue => {
     const normalized = Math.max(0, Number(nextValue || 0));
@@ -118,14 +118,24 @@ export default function App() {
   }, [settingsPanelOpen]);
 
   useEffect(() => {
-    if (!profileMenuOpen) return;
+    if (!balanceModalOpen) return;
     const handler = e => {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target))
-        setProfileMenuOpen(false);
+      if (e.key === "Escape") {
+        setBalanceModalOpen(false);
+      }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [profileMenuOpen]);
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [balanceModalOpen]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("modal") !== "balance") return;
+    setBalanceModalOpen(true);
+    url.searchParams.delete("modal");
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, "", next);
+  }, []);
 
   // ── Responsive ─────────────────────────────────────────────────────────────
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 900);
@@ -710,19 +720,6 @@ export default function App() {
     }
   }
 
-  async function handleSignOut() {
-    if (isLocalMode) return;
-    setAuthBusy(true);
-    setAuthError("");
-    try {
-      await signOutUser();
-    } catch (err) {
-      setAuthError(err?.message || "Could not sign out.");
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
   function closeModal() { setModal(null); setAddTradeOpen(false); setTradeForm(emptyTrade()); }
 
   const isBackendId = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id ?? ""));
@@ -899,7 +896,10 @@ export default function App() {
     letterSpacing: "0.1em",
     fontWeight: 700,
   };
+  const shellPadX = isDesktop ? 22 : 14;
   const sectionPad = isDesktop ? 16 : 16;
+  const cardPad = 10;
+  const modalPad = 20;
 
   const syncInfo = {
     loading: { col: accent, label: "Loading..." },
@@ -915,9 +915,6 @@ export default function App() {
       <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", lineHeight: 1 }}>{syncInfo.label}</span>
     </div>
   );
-  const currentUserLabel = isLocalMode
-    ? "Local mode"
-    : authUser?.user_metadata?.full_name?.trim() || authUser?.email || "Account";
   const calendarSectionBg = dark ? "rgba(255,255,255,0.015)" : "rgba(31,35,40,0.02)";
   const railSectionBg = dark ? "rgba(255,255,255,0.02)" : "rgba(31,35,40,0.03)";
   const openTradeCard = {
@@ -1174,7 +1171,7 @@ export default function App() {
 
   // ── Calendar ───────────────────────────────────────────────────────────────
   const calendarContent = (
-    <div style={{ ...panel, background: calendarSectionBg, padding: isDesktop ? `${sectionPad}px ${sectionPad}px 12px` : sectionPad, height: "auto", display: "flex", flexDirection: "column", overflow: "hidden", border: isDesktop ? "none" : `1px solid ${tk.border}`, borderTop: isDesktop ? "none" : `1px solid ${tk.border}`, borderRight: isDesktop ? "none" : undefined, borderLeft: isDesktop ? "none" : undefined }}>
+    <div style={{ ...panel, background: calendarSectionBg, padding: sectionPad, height: "auto", display: "flex", flexDirection: "column", overflow: "hidden", border: isDesktop ? "none" : `1px solid ${tk.border}`, borderTop: isDesktop ? "none" : `1px solid ${tk.border}`, borderRight: isDesktop ? "none" : undefined, borderLeft: isDesktop ? "none" : undefined }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginBottom: isDesktop ? 14 : 18, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <div style={{ fontSize: 12, color: tk.text, fontWeight: 600, letterSpacing: "0.01em" }}>P/L Calendar</div>
@@ -1219,7 +1216,7 @@ export default function App() {
       </div>
 
       {monthSessions.length > 0 && (
-        <div style={{ padding: isDesktop ? "6px 2px 10px" : "6px 2px 14px", marginBottom: isDesktop ? 12 : 18, flexShrink: 0 }}>
+        <div style={{ padding: isDesktop ? "6px 0 12px" : "6px 0 14px", marginBottom: isDesktop ? 12 : 18, flexShrink: 0 }}>
           <div style={{ fontSize: isDesktop ? 22 : 22, fontWeight: 700, color: fmtColor(monthTotal), lineHeight: 1, marginBottom: 8, letterSpacing: "-0.01em" }}>
             {fmtCalendarValue(monthTotal)}
           </div>
@@ -1234,7 +1231,7 @@ export default function App() {
       )}
 
       {sessions.length === 0 && (
-        <div style={{ marginBottom: 18, padding: isDesktop ? "6px 2px 2px" : "4px 2px 2px", flexShrink: 0 }}>
+        <div style={{ marginBottom: 18, padding: isDesktop ? "6px 0 2px" : "4px 0 2px", flexShrink: 0 }}>
           <div style={{ fontSize: 20, fontWeight: 700, color: tk.text, lineHeight: 1.1 }}>No data yet</div>
           <div style={{ marginTop: 8, fontSize: 12, color: tk.textMid, lineHeight: 1.6, maxWidth: 520 }}>
             Import your first session to start tracking P/L, rule adherence, and consistency.
@@ -1341,7 +1338,7 @@ export default function App() {
               { l: "Win rate", v: calendarHover.quick.winRate + "%", c: tk.text },
               { l: "% rules", v: calendarHover.quick.ruleRate + "%", c: green },
             ].map(item => (
-              <div key={item.l} style={{ ...quietPanel, padding: "9px 10px" }}>
+              <div key={item.l} style={{ ...quietPanel, padding: cardPad }}>
                 <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{item.l}</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: item.c }}>{item.v}</div>
               </div>
@@ -1404,7 +1401,7 @@ export default function App() {
       {(openTrades.length > 0 || normalizedExtensionOpenTrades.length > 0) && (
         <div style={{ padding: sectionPad, borderBottom: `1px solid ${tk.borderSub}` }}>
           <div style={{ ...labelStyle, marginBottom: 8 }}>Live positions</div>
-          <div style={{ ...quietPanel, padding: "9px 10px", marginBottom: 10 }}>
+          <div style={{ ...quietPanel, padding: cardPad, marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: reconciliationSummary.ok ? green : tk.text }}>Sync health</div>
               <div style={{ fontSize: 11, color: reconciliationSummary.ok ? green : red, fontWeight: 700 }}>
@@ -1435,7 +1432,7 @@ export default function App() {
               const lastCapture = pos.lastCapture || null;
               const cardSyncOk = extMatch && Math.abs(Number(extMatch.positionSizeSol || 0) - Number(pos.positionSizeSol || 0)) <= 0.0001;
               return (
-                <div key={pos.positionId} style={{ ...quietPanel, padding: "10px 10px 11px" }}>
+                <div key={pos.positionId} style={{ ...quietPanel, padding: cardPad }}>
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>{pos.tokenName}</div>
@@ -1448,12 +1445,12 @@ export default function App() {
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 10 }}>
-                    <div style={{ ...quietPanel, padding: "8px 9px" }}>
+                    <div style={{ ...quietPanel, padding: cardPad }}>
                       <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Capture</div>
                       <div style={{ fontSize: 11, color: tk.text, lineHeight: 1.45 }}>{entryCapture?.marketCapSource || pos.marketCapSource || "unknown"}</div>
                       <div style={{ fontSize: 10, color: tk.textDim, marginTop: 4 }}>{formatTimelineTime(entryCapture?.capturedAt || pos.openedAt)}</div>
                     </div>
-                    <div style={{ ...quietPanel, padding: "8px 9px" }}>
+                    <div style={{ ...quietPanel, padding: cardPad }}>
                       <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Protection</div>
                       <div style={{ fontSize: 11, color: tk.text, lineHeight: 1.45 }}>
                         SL {pos.stopLossPct ? `${Math.abs(pos.stopLossPct).toFixed(1)}%` : "—"} · TP {pos.targetSellPct ? `${pos.targetSellPct.toFixed(1)}%` : "—"}
@@ -1660,11 +1657,11 @@ export default function App() {
                 { label: "Negative", trades: highlightHover.negativeTrades, pnl: highlightHover.negativeNet, color: red },
               ].map(item => (
                 <div key={item.label} style={{ display: "contents" }}>
-                  <div style={{ ...quietPanel, padding: "8px 9px" }}>
+                  <div style={{ ...quietPanel, padding: cardPad }}>
                     <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{item.label} trades</div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: tk.text }}>{item.trades}</div>
                   </div>
-                  <div style={{ ...quietPanel, padding: "8px 9px" }}>
+                  <div style={{ ...quietPanel, padding: cardPad }}>
                     <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{item.label} P/L</div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: item.color }}>{item.trades ? fmtCalendarValue(item.pnl) : fmtCalendarValue(0)}</div>
                   </div>
@@ -1695,7 +1692,7 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ ...panel, padding: "24px 22px", borderRadius: 14 }}>
+        <div style={{ ...panel, padding: `${modalPad + 4}px ${modalPad + 2}px`, borderRadius: 14 }}>
           {!hasSupabaseConfig ? (
             <>
               <div style={{ fontSize: 15, fontWeight: 700, color: tk.text, marginBottom: 8 }}>Connect Supabase</div>
@@ -1834,7 +1831,7 @@ export default function App() {
 
   // ── Session detail header ──────────────────────────────────────────────────
   const panelHeader = modal ? (
-    <div style={{ padding: "18px 20px 16px", borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(31,35,40,0.07)"}`, position: "sticky", top: 0, background: tk.modalBg, zIndex: 10, fontFamily: sans }}>
+    <div style={{ padding: `${modalPad - 2}px ${modalPad}px ${modalPad - 4}px`, borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(31,35,40,0.07)"}`, position: "sticky", top: 0, background: tk.modalBg, zIndex: 10, fontFamily: sans }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 17, color: tk.text, lineHeight: 1.15 }}>{modal.date}</div>
@@ -1849,7 +1846,7 @@ export default function App() {
 
   // ── Settings panel ────────────────────────────────────────────────────────
   const settingsPanel = settingsPanelOpen && (
-    <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 216, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: "14px 14px 12px", zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 216, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
         <div style={{ display: "flex", gap: 7 }}>
@@ -1857,15 +1854,6 @@ export default function App() {
             <button key={p.key} title={p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ width: 24, height: 24, borderRadius: "50%", background: p.base, border: accentKey === p.key ? `2.5px solid ${tk.text}` : "2.5px solid transparent", outline: "none", cursor: "pointer", padding: 0, flexShrink: 0, boxShadow: accentKey === p.key ? `0 0 0 3px ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"}` : "none" }} />
           ))}
         </div>
-      </div>
-      <div>
-        <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Virtual balance</div>
-        <div style={{ fontSize: 14, color: tk.text, fontWeight: 700, marginBottom: 8 }}>{virtualBalance.toFixed(2)} SOL</div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 7 }}>
-          <input type="number" min="0" step="0.1" placeholder="Add SOL" value={balanceInputVal} onChange={e => setBalanceInputVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { const v = Number(balanceInputVal); if (v > 0) { syncVirtualBalance(virtualBalance + v); setBalanceInputVal(""); } } }} style={{ flex: 1, background: tk.inp.bg, border: `1px solid ${tk.inp.border}`, color: tk.inp.color, borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: sans, outline: "none", minWidth: 0 }} />
-          <button onClick={() => { const v = Number(balanceInputVal); if (v > 0) { syncVirtualBalance(virtualBalance + v); setBalanceInputVal(""); } }} style={{ background: `${accent}18`, border: `1px solid ${accent}44`, color: accent, borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 600, fontFamily: sans, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>Add</button>
-        </div>
-        <button onClick={resetVirtualBalance} style={{ background: "none", border: "none", color: red, fontSize: 11, fontFamily: sans, cursor: "pointer", padding: 0, opacity: 0.7, display: "block" }} onMouseEnter={e => e.currentTarget.style.opacity = "1"} onMouseLeave={e => e.currentTarget.style.opacity = "0.7"}>Reset balance</button>
       </div>
     </div>
   );
@@ -1877,81 +1865,153 @@ export default function App() {
       {settingsPanel}
     </div>
   );
-  const profileMenu = !isLocalMode && profileMenuOpen ? (
-    <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, minWidth: 140, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.24)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 6, zIndex: 220, display: "flex", flexDirection: "column" }}>
-      <button
-        onClick={() => {
-          setProfileMenuOpen(false);
-          handleSignOut();
-        }}
-        style={{ background: "transparent", border: "none", borderRadius: 8, color: tk.text, cursor: "pointer", fontFamily: sans, fontSize: 12, fontWeight: 600, padding: "10px 12px", textAlign: "left" }}
-      >
-        Sign out
-      </button>
-    </div>
-  ) : null;
   const profileTrigger = (
-    <div ref={profileMenuRef} style={{ position: "relative", minWidth: 0 }}>
-      <button
-        type="button"
-        onClick={() => {
-          if (isLocalMode) return;
-          setProfileMenuOpen(v => !v);
-        }}
-        aria-label={isLocalMode ? "User profile" : "User profile menu"}
-        aria-haspopup={isLocalMode ? undefined : "menu"}
-        aria-expanded={isLocalMode ? undefined : profileMenuOpen}
+    <div style={{ position: "relative", minWidth: 0 }}>
+      <div
+        aria-label="Streak"
         style={{
-          background: "transparent",
-          border: "none",
-          padding: 0,
-          margin: 0,
-          color: "inherit",
-          cursor: isLocalMode ? "default" : "pointer",
           minWidth: 0,
           display: "flex",
           alignItems: "center",
-          gap: 10,
         }}
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: tk.textDim, flexShrink: 0 }}><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/></svg>
-        <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: isLocalMode ? "default" : "pointer", minWidth: 0 }}>{currentUserLabel}</span>
         {streakBadge}
-      </button>
-      {profileMenu}
+      </div>
     </div>
   );
   const headerPnl = (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", flexShrink: 0 }}>
+    <button
+      onClick={() => setBalanceModalOpen(true)}
+      onMouseEnter={() => setBalanceHover(true)}
+      onMouseLeave={() => setBalanceHover(false)}
+      style={{
+        ...headerButton,
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        padding: "7px 10px",
+        background: balanceModalOpen || balanceHover ? (dark ? "rgba(255,255,255,0.05)" : "rgba(15,23,42,0.04)") : "transparent",
+        border: `1px solid ${balanceModalOpen || balanceHover ? tk.border : "transparent"}`,
+        transition: "background 0.16s ease, border-color 0.16s ease",
+      }}
+    >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}><path fillRule="evenodd" clipRule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solGradH)"/><defs><linearGradient id="solGradH" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stopColor="#9945FF"/><stop offset="0.24" stopColor="#8752F3"/><stop offset="0.465" stopColor="#5497D5"/><stop offset="0.6" stopColor="#43B4CA"/><stop offset="0.735" stopColor="#28E0B9"/><stop offset="1" stopColor="#19FB9B"/></linearGradient></defs></svg>
       <span style={{ color: tk.text, fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em" }}>{virtualBalance.toFixed(2)} SOL</span>
-    </div>
+    </button>
   );
+  const balanceModal = balanceModalOpen ? (
+    <div
+      onClick={() => setBalanceModalOpen(false)}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: dark ? "rgba(0,0,0,0.56)" : "rgba(31,35,40,0.22)",
+        backdropFilter: "blur(8px)",
+        zIndex: 520,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          ...panel,
+          background: tk.modalBg,
+          width: "100%",
+          maxWidth: 380,
+          borderRadius: 16,
+          padding: modalPad,
+          fontFamily: sans,
+          boxShadow: dark ? "0 24px 60px rgba(0,0,0,0.34)" : "0 24px 60px rgba(15,23,42,0.14)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, marginBottom: 18 }}>
+          <div>
+            <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 7 }}>Portfolio balance</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: tk.text, lineHeight: 1 }}>{virtualBalance.toFixed(2)} SOL</div>
+          </div>
+          <button onClick={() => setBalanceModalOpen(false)} style={{ ...headerButton, padding: "6px 8px", color: tk.textMid }}>Close</button>
+        </div>
+        <div style={{ fontSize: 12, color: tk.textMid, lineHeight: 1.6, marginBottom: 14 }}>
+          Add SOL to your paper portfolio and keep it synced with the extension balance.
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input
+            autoFocus
+            type="number"
+            min="0"
+            step="0.1"
+            placeholder="Add SOL"
+            value={balanceInputVal}
+            onChange={e => setBalanceInputVal(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") {
+                const v = Number(balanceInputVal);
+                if (v > 0) {
+                  syncVirtualBalance(virtualBalance + v);
+                  setBalanceInputVal("");
+                  setBalanceModalOpen(false);
+                }
+              }
+            }}
+            style={{ flex: 1, background: tk.inp.bg, border: `1px solid ${tk.inp.border}`, color: tk.inp.color, borderRadius: 8, padding: "10px 12px", fontSize: 13, fontFamily: sans, outline: "none", minWidth: 0 }}
+          />
+          <button
+            onClick={() => {
+              const v = Number(balanceInputVal);
+              if (v > 0) {
+                syncVirtualBalance(virtualBalance + v);
+                setBalanceInputVal("");
+                setBalanceModalOpen(false);
+              }
+            }}
+            style={{ background: `${accent}18`, border: `1px solid ${accent}44`, color: accent, borderRadius: 8, padding: "0 14px", fontSize: 13, fontWeight: 700, fontFamily: sans, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+          >
+            Add
+          </button>
+        </div>
+        <button
+          onClick={() => {
+            resetVirtualBalance();
+            setBalanceInputVal("");
+            setBalanceModalOpen(false);
+          }}
+          style={{ background: "none", border: "none", color: red, fontSize: 12, fontFamily: sans, cursor: "pointer", padding: 0, opacity: 0.8 }}
+        >
+          Reset balance
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   // ── Header ─────────────────────────────────────────────────────────────────
   const appHeader = (
     <header style={{ borderBottom: `1px solid ${tk.border}`, position: "sticky", top: 0, background: tk.modalBg, backdropFilter: "blur(18px)", zIndex: 100, fontFamily: sans }}>
-      <div style={{ height: isDesktop ? 54 : 56, maxWidth: 1180, margin: "0 auto", padding: isDesktop ? "0 22px" : "0 14px" }}>
+      <div style={{ height: isDesktop ? 54 : 56, maxWidth: 1180, margin: "0 auto", padding: `0 ${shellPadX}px` }}>
         {isDesktop ? (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", height: "100%", alignItems: "stretch" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, padding: `0 ${sectionPad}px` }}>
+              {headerPnl}
               {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, borderLeft: `1px solid ${tk.border}`, padding: `0 ${sectionPad}px`, minWidth: 0 }}>
-              {settingsIconBtn}
-              {headerPnl}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderLeft: `1px solid ${tk.border}`, padding: `0 ${sectionPad}px`, minWidth: 0 }}>
               {profileTrigger}
+              {settingsIconBtn}
             </div>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, height: "100%" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              {headerPnl}
               {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minWidth: 0 }}>
-              {settingsIconBtn}
-              {headerPnl}
               {profileTrigger}
+              {settingsIconBtn}
             </div>
           </div>
         )}
@@ -1961,7 +2021,7 @@ export default function App() {
 
 
   // ── Content padding ────────────────────────────────────────────────────────
-  const contentPad = isDesktop ? "0 22px 0" : "16px 12px 72px";
+  const contentPad = isDesktop ? `0 ${shellPadX}px 0` : `16px ${shellPadX}px 72px`;
   const desktopLeftDivider = (
     <div
       aria-hidden="true"
@@ -1969,7 +2029,7 @@ export default function App() {
         position: "fixed",
         top: 0,
         bottom: 0,
-        left: "max(22px, calc((100vw - 1180px) / 2 + 22px))",
+        left: `max(${shellPadX}px, calc((100vw - 1180px) / 2 + ${shellPadX}px))`,
         width: 1,
         background: tk.border,
         pointerEvents: "none",
@@ -1984,7 +2044,7 @@ export default function App() {
         position: "fixed",
         top: 0,
         bottom: 0,
-        right: "max(22px, calc((100vw - 1180px) / 2 + 22px))",
+        right: `max(${shellPadX}px, calc((100vw - 1180px) / 2 + ${shellPadX}px))`,
         width: 1,
         background: tk.border,
         pointerEvents: "none",
@@ -1996,7 +2056,7 @@ export default function App() {
   // ── Invite panel ──────────────────────────────────────────────────────────
   const invitePanel = invitePanelOpen ? (
     <div onClick={() => setInvitePanelOpen(false)} style={{ position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.62)" : "rgba(31,35,40,0.28)", backdropFilter: "blur(8px)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: 16, width: "100%", maxWidth: 420, padding: "22px 20px 24px", fontFamily: sans }}>
+      <div onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: 16, width: "100%", maxWidth: 420, padding: modalPad, fontFamily: sans }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>Invite codes</span>
           <button onClick={() => setInvitePanelOpen(false)} style={{ ...headerButton, color: tk.textMid }}>Close</button>
@@ -2030,7 +2090,7 @@ export default function App() {
               const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${inv.code}`;
               const copied = inviteCopied === inv.code;
               return (
-                <div key={inv.code} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 10px", borderRadius: 8, background: inv.used_at ? tk.surface2 : `${accent}0d`, border: `1px solid ${inv.used_at ? tk.borderSub : accent + "22"}` }}>
+                <div key={inv.code} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: cardPad, borderRadius: 8, background: inv.used_at ? tk.surface2 : `${accent}0d`, border: `1px solid ${inv.used_at ? tk.borderSub : accent + "22"}` }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                     <span style={{ fontFamily: "monospace", fontSize: 13, letterSpacing: "0.08em", color: inv.used_at ? tk.textDim : tk.text }}>{inv.code}</span>
                     <span style={{ fontSize: 11, color: tk.textDim }}>{inv.used_at ? "Used" : "Available"}</span>
@@ -2089,6 +2149,7 @@ export default function App() {
           </>
         )}
         {invitePanel}
+        {balanceModal}
       </div>
     );
   }
@@ -2123,6 +2184,7 @@ export default function App() {
         </div>
       )}
       {invitePanel}
+      {balanceModal}
     </div>
   );
 }
