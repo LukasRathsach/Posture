@@ -1,10 +1,10 @@
 export const FEE_PER_TRADE = 0.01;
 export const RULES = { minEntryMC: 10000, maxLossPct: -30, maxTradesPerHour: 5 };
 
-export const accent    = "#F59E0B";
-export const accentDim = "#D97706";
-export const green     = "#22C55E";
-export const red       = "#EF4444";
+export const accent    = "#8FA1BF";
+export const accentDim = "#6E82A4";
+export const green     = "#50FF6C";
+export const red       = "#E05050";
 export const serif     = "'Inter', 'Geist Sans', system-ui, sans-serif";
 export const sans      = "'Inter', 'Geist Sans', system-ui, sans-serif";
 
@@ -164,14 +164,14 @@ export function summarizeReflectionTrends(sessions) {
 
 export const THEME = {
   dark: {
-    bg: "#0F172A", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929",
-    border: "#334155", borderSub: "#1E293B",
-    text: "#F8FAFC", textMid: "#94A3B8", textDim: "#64748B",
-    modalBg: "#0F172A", modalSurf: "#1E293B",
-    inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" },
-    calWin:    { bg: "#0C2518", border: "#14532D" },
-    calBigWin: { bg: "#1C1408", border: "#78350F", text: "#FBBF24" },
-    calLoss:   { bg: "#1A0F10", border: "#7F1D1D" },
+    bg: "#0C0D10", surface1: "#0C0D10", surface2: "#111214", surface3: "#131416",
+    border: "rgba(255,255,255,0.10)", borderSub: "rgba(255,255,255,0.07)",
+    text: "#FFFFFF", textMid: "#E2E4EA", textDim: "#B0B6C2",
+    modalBg: "rgba(12,13,16,0.94)", modalSurf: "rgba(17,19,23,0.96)",
+    inp: { bg: "rgba(0,0,0,0.18)", border: "rgba(255,255,255,0.12)", color: "#F3F4F6" },
+    calWin:    { bg: "#0E1D13", border: "#214730" },
+    calBigWin: { bg: "#17160C", border: "#5F5526", text: "#D8CC89" },
+    calLoss:   { bg: "#180F12", border: "#5A2A31" },
   },
   light: {
     bg: "#f7f7f5", surface1: "#ffffff", surface2: "#f2f3f1", surface3: "#eceeeb",

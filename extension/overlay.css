@@ -8,9 +8,9 @@
   --td-card-border-strong: rgba(255, 255, 255, 0.13);
   --td-field-bg: rgba(0, 0, 0, 0.18);
   --td-field-text: #f3f4f6;
-  --td-text: #f3f4f6;
-  --td-text-mid: #c8cdd6;
-  --td-text-dim: #9ba3b1;
+  --td-text: #ffffff;
+  --td-text-mid: #e2e4ea;
+  --td-text-dim: #b0b6c2;
   --td-text-muted: #8a91a0;
   --td-text-faint: #636a78;
   --td-shell-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
@@ -150,18 +150,17 @@
 
 .td-overlay-balance-tip {
   position: absolute;
-  bottom: calc(100% + 7px);
+  top: calc(100% + 6px);
   left: 50%;
-  transform: translateX(-50%) translateY(2px);
+  transform: translateX(-50%) translateY(-2px);
   background: var(--td-bg);
-  border: 1px solid var(--td-border);
-  border-radius: 6px;
-  box-shadow: var(--td-menu-shadow);
-  color: var(--td-text-mid);
+  border: 1px solid var(--td-border-subtle);
+  border-radius: 5px;
+  color: var(--td-text-dim);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1.2;
-  padding: 6px 8px;
+  padding: 4px 8px;
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -250,8 +249,18 @@
   stroke-width: 0;
 }
 
-.td-overlay-icon-btn-pos.is-active {
-  color: #50ff6c;
+@keyframes td-icon-breathe {
+  0%, 100% { opacity: 0.45; }
+  50%       { opacity: 1; }
+}
+
+.td-overlay-icon-btn.is-live:not(.is-active) {
+  animation: td-icon-breathe 2.6s ease-in-out infinite;
+  color: var(--td-text-mid);
+}
+
+.td-overlay-icon-btn.is-active {
+  color: #ffffff;
 }
 
 .td-overlay-panel {
@@ -270,6 +279,38 @@
   letter-spacing: 0.06em;
   color: var(--td-text-muted);
   font-weight: 500;
+}
+
+.td-overlay-coin-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 0 5px;
+  border-bottom: 1px solid var(--td-border-subtle);
+  margin-bottom: 2px;
+  min-width: 0;
+}
+
+.td-overlay-coin-ticker {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--td-text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.td-overlay-coin-mc {
+  font-size: 11px;
+  color: var(--td-text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.td-overlay-coin-chg {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .td-overlay-preset-grid {

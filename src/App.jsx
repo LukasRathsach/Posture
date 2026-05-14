@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   FEE_PER_TRADE, green, red, sans,
   fmtPct, fmtColor, netPnl, tradeNet, emptyTrade,
@@ -8,8 +8,7 @@ import {
   getCurrentUser,
   deletePaperTradesByIds,
   hasSupabaseConfig,
-  loadClosedPaperTrades,
-  loadOpenPaperTrades,
+  loadClosedAndOpenPaperTrades,
   loadSessions,
   onAuthStateChange,
   saveSessions,
@@ -27,7 +26,7 @@ import {
 } from "./api";
 import { attachPostureBridge, postOpenPositionsUpdate, postSessionUpdate } from "./postureBridge";
 import { EmptyState, InlineLoader, StatusNotice } from "./uiPrimitives";
-import { getCollectionUiState, getSyncPresentation, UI_STATE } from "./uiState";
+import { getCollectionUiState, UI_STATE } from "./uiState";
 
 const DAYS = ["M", "T", "W", "T", "F", "S", "S"];
 const MISSION_TARGETS = {
@@ -36,6 +35,41 @@ const MISSION_TARGETS = {
   ruleCompliance: 0.85,
 };
 const LOCAL_STORAGE_KEY = "trading-dashboard-sessions";
+
+const ACCENT_PRESETS = [
+  {
+    key: "axiom", base: "#50ff6c", dim: "#3de858", rgb: "80,255,108", swatch: "#0C0D10",
+    dark: { bg: "#0C0D10", headerBg: "rgba(12,13,16,0.92)", surface1: "#0C0D10", surface2: "#111214", surface3: "#131416", border: "rgba(255,255,255,0.10)", borderSub: "rgba(255,255,255,0.07)", inp: { bg: "rgba(0,0,0,0.22)", border: "rgba(255,255,255,0.10)", color: "#F3F4F6" } },
+  },
+  {
+    key: "amber", base: "#F59E0B", dim: "#D97706", rgb: "245,158,11",
+    dark: { bg: "#0F172A", headerBg: "rgba(15,23,42,0.82)", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929", border: "#334155", borderSub: "#1E293B", inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" } },
+  },
+  {
+    key: "teal", base: "#14B8A6", dim: "#0D9488", rgb: "20,184,166",
+    dark: { bg: "#061516", headerBg: "rgba(6,21,22,0.82)", surface1: "#0C2426", surface2: "#081B1D", surface3: "#051012", border: "#165054", borderSub: "#0C2426", inp: { bg: "#0C2426", border: "#165054", color: "#F8FAFC" } },
+  },
+  {
+    key: "violet", base: "#8B5CF6", dim: "#7C3AED", rgb: "139,92,246",
+    dark: { bg: "#0D0B18", headerBg: "rgba(13,11,24,0.82)", surface1: "#17132A", surface2: "#110F21", surface3: "#0A0815", border: "#2C2350", borderSub: "#17132A", inp: { bg: "#17132A", border: "#2C2350", color: "#F8FAFC" } },
+  },
+  {
+    key: "rose", base: "#F43F5E", dim: "#E11D48", rgb: "244,63,94",
+    dark: { bg: "#130810", headerBg: "rgba(19,8,16,0.82)", surface1: "#221018", surface2: "#1A0C15", surface3: "#0F060C", border: "#3D1425", borderSub: "#221018", inp: { bg: "#221018", border: "#3D1425", color: "#F8FAFC" } },
+  },
+];
+
+const IS_BACKEND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isBackendId = id => IS_BACKEND_ID.test(String(id ?? ""));
+
+function weekKey(dateStr) {
+  const d = new Date(dateStr + "T12:00:00");
+  const day = d.getDay() || 7;
+  d.setDate(d.getDate() + 4 - day);
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2, "0")}`;
+}
 
 function loadLocalSessions() {
   try {
@@ -50,30 +84,8 @@ function loadLocalSessions() {
 
 export default function App() {
   // ── Theme ──────────────────────────────────────────────────────────────────
-  const ACCENT_PRESETS = [
-    {
-      key: "axiom", base: "#8FA1BF", dim: "#6E82A4",
-      dark: { bg: "#0B1220", surface1: "#111A2B", surface2: "#0D1625", surface3: "#0A1220", border: "#2A3850", borderSub: "#182235", inp: { bg: "#111A2B", border: "#2A3850", color: "#F8FAFC" } },
-    },
-    {
-      key: "amber", base: "#F59E0B", dim: "#D97706",
-      dark: { bg: "#0F172A", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929", border: "#334155", borderSub: "#1E293B", inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" } },
-    },
-    {
-      key: "teal", base: "#14B8A6", dim: "#0D9488",
-      dark: { bg: "#061516", surface1: "#0C2426", surface2: "#081B1D", surface3: "#051012", border: "#165054", borderSub: "#0C2426", inp: { bg: "#0C2426", border: "#165054", color: "#F8FAFC" } },
-    },
-    {
-      key: "violet", base: "#8B5CF6", dim: "#7C3AED",
-      dark: { bg: "#0D0B18", surface1: "#17132A", surface2: "#110F21", surface3: "#0A0815", border: "#2C2350", borderSub: "#17132A", inp: { bg: "#17132A", border: "#2C2350", color: "#F8FAFC" } },
-    },
-    {
-      key: "rose", base: "#F43F5E", dim: "#E11D48",
-      dark: { bg: "#130810", surface1: "#221018", surface2: "#1A0C15", surface3: "#0F060C", border: "#3D1425", borderSub: "#221018", inp: { bg: "#221018", border: "#3D1425", color: "#F8FAFC" } },
-    },
-  ];
   const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const [accentKey, setAccentKey] = useState(() => localStorage.getItem("posture_accent_key") || "amber");
+  const [accentKey, setAccentKey] = useState(() => localStorage.getItem("posture_accent_key") || "axiom");
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const h = e => setDark(e.matches);
@@ -83,10 +95,12 @@ export default function App() {
   const activeAccentPreset = ACCENT_PRESETS.find(p => p.key === accentKey) ?? ACCENT_PRESETS[0];
   const accent = activeAccentPreset.base;
   const accentDim = activeAccentPreset.dim;
+  const accentRgb = activeAccentPreset.rgb || "80,255,108";
   const baseDark = THEME.dark;
   const tk = dark
     ? { ...baseDark, ...activeAccentPreset.dark, modalBg: activeAccentPreset.dark.bg, modalSurf: activeAccentPreset.dark.surface1 }
     : THEME.light;
+  const headerBg = dark ? (activeAccentPreset.dark.headerBg || "rgba(12,13,16,0.82)") : tk.modalBg;
   useEffect(() => {
     if (!dark) return;
     document.documentElement.style.background = activeAccentPreset.dark.bg;
@@ -99,6 +113,7 @@ export default function App() {
   const [balanceInputVal, setBalanceInputVal] = useState("");
   const [balanceModalOpen, setBalanceModalOpen] = useState(false);
   const [balanceHover, setBalanceHover] = useState(false);
+  const [streakHover, setStreakHover] = useState(false);
   const settingsWrapperRef = useRef(null);
 
   const syncVirtualBalance = nextValue => {
@@ -297,13 +312,12 @@ export default function App() {
   const [inviteCopied, setInviteCopied] = useState("");
   const [inviteStatus, setInviteStatus] = useState(null);
   const [livePositionsStatus, setLivePositionsStatus] = useState(null);
-  const [syncFlash, setSyncFlash] = useState("");
   const [openTradeDeleteBusyId, setOpenTradeDeleteBusyId] = useState("");
   const initialized = useRef(false);
   const saveTimer = useRef(null);
   const lastSyncedTradeKey = useRef("");
+  const lastOpenTradeKey = useRef("");
   const transientTimers = useRef({});
-  const previousSyncStatus = useRef(syncStatus);
   const isLocalMode = !hasSupabaseConfig;
   const isAdmin = authUser?.email === "lukas@rathsach.com";
   const now = new Date();
@@ -468,28 +482,18 @@ export default function App() {
   }, [authUser, isLocalMode, sessions]);
 
   useEffect(() => {
-    const previous = previousSyncStatus.current;
-    if (syncStatus === "ok" && previous !== "ok" && previous !== "loading") {
-      showTransientMessage("sync-flash", setSyncFlash, "Session synced");
-    }
-    if (syncStatus === "local" && previous !== "local" && previous !== "loading") {
-      showTransientMessage("sync-flash", setSyncFlash, "Saved on this device");
-    }
-    previousSyncStatus.current = syncStatus;
-  }, [syncStatus]);
-
-  useEffect(() => {
     if (isLocalMode || !authUser) return;
 
     let cancelled = false;
     const syncExtensionTrades = async () => {
       try {
-        const [closedTrades, openPositions] = await Promise.all([
-          loadClosedPaperTrades(authUser.id),
-          loadOpenPaperTrades(authUser.id),
-        ]);
+        const { closed: closedTrades, open: openPositions } = await loadClosedAndOpenPaperTrades(authUser.id);
         if (cancelled) return;
-        setOpenTrades(openPositions);
+        const openKey = openPositions.map(t => t.id || t.positionId).sort().join(",");
+        if (openKey !== lastOpenTradeKey.current) {
+          lastOpenTradeKey.current = openKey;
+          setOpenTrades(openPositions);
+        }
         if (closedTrades.length) {
           const key = closedTrades.map(t => t.id).sort().join(",");
           if (key !== lastSyncedTradeKey.current) {
@@ -572,7 +576,7 @@ export default function App() {
     });
   };
 
-  const normalizedExtensionOpenTrades = (() => {
+  const normalizedExtensionOpenTrades = useMemo(() => {
     const seen = new Set();
     return Object.values(extensionOpenPositions || {})
       .filter(pos => {
@@ -581,21 +585,12 @@ export default function App() {
         seen.add(key);
         return true;
       });
-  })();
+  }, [extensionOpenPositions]);
 
-  const allTrades = sessions.flatMap(s => s.tradeList || []);
-  const allTimeNet = sessions.reduce((a, s) => a + netPnl(s), 0);
+  const allTrades = useMemo(() => sessions.flatMap(s => s.tradeList || []), [sessions]);
+  const allTimeNet = useMemo(() => sessions.reduce((a, s) => a + netPnl(s), 0), [sessions]);
 
-  const weekKey = dateStr => {
-    const d = new Date(dateStr + "T12:00:00");
-    const day = d.getDay() || 7;
-    d.setDate(d.getDate() + 4 - day);
-    const yearStart = new Date(d.getFullYear(), 0, 1);
-    const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-    return `${d.getFullYear()}-W${String(week).padStart(2, "0")}`;
-  };
-
-  const missionStats = (() => {
+  const missionStats = useMemo(() => {
     const cleanTrades = allTrades.filter(t => checkTrade(t).length === 0).length;
     const ruleCompliance = allTrades.length ? cleanTrades / allTrades.length : 0;
     const weeks = Object.values(sessions.reduce((acc, s) => {
@@ -648,7 +643,7 @@ export default function App() {
         },
       ],
     };
-  })();
+  }, [allTrades, sessions]);
 
   // ── Calendar helpers ───────────────────────────────────────────────────────
   const { y, m } = currentMonth;
@@ -675,13 +670,22 @@ export default function App() {
   const cleanTradeRate = allTrades.length ? Math.round(cleanTradeCount / allTrades.length * 100) : 0;
 
   const allSorted = [...sessions].sort((a, b) => a.date.localeCompare(b.date));
-  let curStreak = 0, curStreakPos = true;
+  let curStreak = 0, curStreakPos = false;
   if (allSorted.length) {
-    curStreakPos = netPnl(allSorted[allSorted.length - 1]) > 0;
-    for (let i = allSorted.length - 1; i >= 0; i--) {
-      const p = netPnl(allSorted[i]);
-      if ((p > 0) === curStreakPos) curStreak++;
-      else break;
+    const latestSession = allSorted[allSorted.length - 1];
+    curStreakPos = netPnl(latestSession) > 0;
+    if (curStreakPos) {
+      curStreak = 1;
+      for (let i = allSorted.length - 1; i > 0; i--) {
+        const current = allSorted[i];
+        const previous = allSorted[i - 1];
+        if (netPnl(previous) <= 0) break;
+        const currentDate = new Date(current.date + "T12:00:00");
+        const previousDate = new Date(previous.date + "T12:00:00");
+        const diffDays = Math.round((currentDate - previousDate) / 86400000);
+        if (diffDays !== 1) break;
+        curStreak++;
+      }
     }
   }
   const monthSorted = [...monthSessions].sort((a, b) => a.date.localeCompare(b.date));
@@ -764,7 +768,6 @@ export default function App() {
 
   function closeModal() { setModal(null); setAddTradeOpen(false); setTradeForm(emptyTrade()); }
 
-  const isBackendId = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id ?? ""));
 
   async function deleteSession() {
     if (!modal) return;
@@ -841,7 +844,7 @@ export default function App() {
 
   // ── Style primitives ───────────────────────────────────────────────────────
   const inp = {
-    fontSize: 14, padding: "11px 13px", borderRadius: 6,
+    fontSize: 14, padding: "11px 13px", borderRadius: 8,
     border: `1px solid ${tk.inp.border}`, background: tk.inp.bg,
     color: tk.inp.color, fontFamily: sans, width: "100%",
     WebkitAppearance: "none", outline: "none",
@@ -849,19 +852,19 @@ export default function App() {
   const panel = {
     background: tk.surface1,
     border: `1px solid ${tk.border}`,
-    borderRadius: 2,
+    borderRadius: 8,
     boxShadow: "none",
   };
   const quietPanel = {
     background: tk.surface2,
     border: `1px solid ${tk.borderSub}`,
-    borderRadius: 2,
+    borderRadius: 8,
   };
   const actionButton = {
     border: `1px solid ${tk.border}`,
-    background: tk.surface2,
+    background: dark ? "rgba(255,255,255,0.03)" : tk.surface2,
     color: tk.text,
-    borderRadius: 6,
+    borderRadius: 8,
     cursor: "pointer",
     fontFamily: sans,
     fontWeight: 600,
@@ -879,7 +882,7 @@ export default function App() {
   const headerButton = {
     ...actionButton,
     background: "transparent",
-    borderRadius: 6,
+    borderRadius: 8,
     padding: "8px 14px",
     fontSize: 13,
     color: tk.text,
@@ -887,68 +890,59 @@ export default function App() {
   };
   const streakLevel = curStreak >= 7 ? "inferno" : curStreak >= 4 ? "hot" : "warm";
   const streakTone = curStreakPos && curStreak >= 2 ? {
-    warm: {
-      color: dark ? "#f1b36c" : "#b87422",
-      bg: dark ? "rgba(201,128,48,0.12)" : "rgba(214,149,62,0.12)",
-      border: dark ? "rgba(214,149,62,0.24)" : "rgba(184,116,34,0.22)",
-      shadow: dark ? "0 0 0 rgba(0,0,0,0)" : "0 0 0 rgba(0,0,0,0)",
-      hoverShadow: dark ? "0 6px 16px rgba(201,128,48,0.16)" : "0 6px 16px rgba(184,116,34,0.10)",
-      flameScale: 1,
-    },
-    hot: {
-      color: dark ? "#f4b06a" : "#b86a1b",
-      bg: dark ? "rgba(214,126,45,0.16)" : "rgba(214,126,45,0.14)",
-      border: dark ? "rgba(224,143,68,0.32)" : "rgba(184,106,27,0.26)",
-      shadow: dark ? "0 0 10px rgba(214,126,45,0.10)" : "0 0 8px rgba(214,126,45,0.08)",
-      hoverShadow: dark ? "0 8px 18px rgba(214,126,45,0.20)" : "0 8px 18px rgba(184,106,27,0.12)",
-      flameScale: 1.08,
-    },
-    inferno: {
-      color: dark ? "#f6c07b" : "#a95f17",
-      bg: dark ? "rgba(194,98,28,0.20)" : "rgba(194,98,28,0.16)",
-      border: dark ? "rgba(225,132,52,0.38)" : "rgba(169,95,23,0.30)",
-      shadow: dark ? "0 0 14px rgba(194,98,28,0.14)" : "0 0 10px rgba(194,98,28,0.10)",
-      hoverShadow: dark ? "0 10px 22px rgba(194,98,28,0.24)" : "0 10px 22px rgba(169,95,23,0.14)",
-      flameScale: 1.16,
-    },
+    warm:   { color: dark ? "#f3ba73" : "#b87422", bg: dark ? "rgba(214,126,45,0.14)" : "rgba(214,149,62,0.10)", border: dark ? "rgba(224,143,68,0.28)" : "rgba(184,116,34,0.20)", flameScale: 1.05 },
+    hot:    { color: dark ? "#f4b06a" : "#b86a1b", bg: dark ? "rgba(214,126,45,0.14)" : "rgba(214,126,45,0.12)", border: dark ? "rgba(224,143,68,0.30)" : "rgba(184,106,27,0.24)", flameScale: 1.08 },
+    inferno:{ color: dark ? "#f6c07b" : "#a95f17", bg: dark ? "rgba(194,98,28,0.18)" : "rgba(194,98,28,0.14)", border: dark ? "rgba(225,132,52,0.34)" : "rgba(169,95,23,0.28)", flameScale: 1.16 },
   }[streakLevel] : {
-    color: tk.textDim,
-    bg: tk.surface2,
-    border: tk.border,
-    shadow: "none",
-    hoverShadow: dark ? "0 6px 14px rgba(0,0,0,0.16)" : "0 6px 14px rgba(31,35,40,0.06)",
-    flameScale: 1,
+    color: tk.textDim, bg: tk.surface2, border: tk.border, flameScale: 1,
   };
+  const streakTooltipText = "Profitable days in a row";
   const streakBadge = (
     <div
-      className="streak-badge"
-      title={curStreakPos ? `Current streak: ${curStreak} positive day${curStreak === 1 ? "" : "s"} in a row` : "Current streak: no active positive streak"}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        height: 26,
-        padding: "0 10px",
-        borderRadius: 999,
-        border: `1px solid ${streakTone.border}`,
-        background: streakTone.bg,
-        boxShadow: streakTone.shadow,
-        color: streakTone.color,
-        flexShrink: 0,
-      }}
-      onMouseEnter={e => {
-        e.currentTarget.style.boxShadow = streakTone.hoverShadow;
-        e.currentTarget.style.borderColor = streakTone.color;
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.boxShadow = streakTone.shadow;
-        e.currentTarget.style.borderColor = streakTone.border;
-      }}
+      style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}
+      onMouseEnter={() => setStreakHover(true)}
+      onMouseLeave={() => setStreakHover(false)}
     >
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className="streak-badge-icon" style={{ transform: `scale(${streakTone.flameScale})`, transformOrigin: "50% 65%", flexShrink: 0, transition: "transform 160ms ease" }}>
-        <path d="M8 16c3.314 0 6 -2 6 -5.5 0 -1.5 -0.5 -4 -2.5 -6 0.25 1.5 -1.25 2 -1.25 2C11 4 9 0.5 6 0c0.357 2 0.5 4 -2 6 -1.25 1 -2 2.729 -2 4.5C2 14 4.686 16 8 16m0 -1c-1.657 0 -3 -1 -3 -2.75 0 -0.75 0.25 -2 1.25 -3C6.125 10 7 10.5 7 10.5c-0.375 -1.25 0.5 -3.25 2 -3.5 -0.179 1 -0.25 2 1 3 0.625 0.5 1 1.364 1 2.25C11 14 9.657 15 8 15" />
-      </svg>
-      <span style={{ fontSize: 12, fontWeight: 800, lineHeight: 1, letterSpacing: "0.01em" }}>{curStreak}</span>
+      <div
+        className="streak-badge"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          height: 26,
+          padding: "0 9px",
+          borderRadius: 999,
+          border: `1px solid ${streakTone.border}`,
+          background: streakTone.bg,
+          color: streakTone.color,
+          flexShrink: 0,
+          cursor: "default",
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className="streak-badge-icon" style={{ transform: `scale(${streakTone.flameScale})`, transformOrigin: "50% 65%", flexShrink: 0, transition: "transform 160ms ease" }}>
+          <path d="M8 16c3.314 0 6 -2 6 -5.5 0 -1.5 -0.5 -4 -2.5 -6 0.25 1.5 -1.25 2 -1.25 2C11 4 9 0.5 6 0c0.357 2 0.5 4 -2 6 -1.25 1 -2 2.729 -2 4.5C2 14 4.686 16 8 16m0 -1c-1.657 0 -3 -1 -3 -2.75 0 -0.75 0.25 -2 1.25 -3C6.125 10 7 10.5 7 10.5c-0.375 -1.25 0.5 -3.25 2 -3.5 -0.179 1 -0.25 2 1 3 0.625 0.5 1 1.364 1 2.25C11 14 9.657 15 8 15" />
+        </svg>
+        <span style={{ fontSize: 12, fontWeight: 800, lineHeight: 1, letterSpacing: "0.01em" }}>{curStreak}</span>
+      </div>
+      {streakHover && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 6px)",
+          right: 0,
+          background: dark ? tk.surface2 : tk.modalBg,
+          border: `1px solid ${tk.borderSub}`,
+          borderRadius: 5,
+          padding: "5px 8px",
+          fontSize: 11,
+          color: tk.textDim,
+          whiteSpace: "nowrap",
+          pointerEvents: "none",
+          zIndex: 300,
+          fontFamily: sans,
+        }}>
+          {streakTooltipText}
+        </div>
+      )}
     </div>
   );
   const currencyToggle = (
@@ -980,8 +974,8 @@ export default function App() {
       strongText: tk.text,
     },
     accent: {
-      bg: dark ? "rgba(245,158,11,0.09)" : "rgba(245,158,11,0.08)",
-      border: dark ? "rgba(245,158,11,0.22)" : "rgba(217,119,6,0.18)",
+      bg: dark ? `rgba(${accentRgb},0.09)` : `rgba(${accentRgb},0.08)`,
+      border: dark ? `rgba(${accentRgb},0.22)` : `rgba(${accentRgb},0.18)`,
       text: accent,
       strongText: tk.text,
     },
@@ -998,28 +992,14 @@ export default function App() {
       strongText: tk.text,
     },
   };
-  const syncInfo = getSyncPresentation(syncStatus);
-  const syncToneColor = syncInfo.tone === "success" ? green : syncInfo.tone === "error" ? red : accent;
   const inviteListState = getCollectionUiState({ loading: inviteListLoading, items: inviteList });
   const livePositionsState = openTrades.length > 0
     ? UI_STATE.IDLE
     : (!isLocalMode && authUser && syncStatus === "loading" ? UI_STATE.LOADING : UI_STATE.EMPTY);
-  const syncBadge = (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, paddingLeft: 4 }}>
-      {(syncInfo.state === UI_STATE.LOADING || syncInfo.state === UI_STATE.SAVING) ? (
-        <InlineLoader label={syncInfo.label} tone="accent" />
-      ) : (
-        <>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: syncToneColor, flexShrink: 0, boxShadow: syncFlash ? `0 0 0 5px ${syncToneColor}22` : "none", transition: "box-shadow 180ms ease" }} />
-          <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", lineHeight: 1 }}>{syncFlash || syncInfo.label}</span>
-        </>
-      )}
-    </div>
-  );
-  const calendarSectionBg = dark ? "rgba(255,255,255,0.015)" : "rgba(31,35,40,0.02)";
-  const railSectionBg = dark ? "rgba(255,255,255,0.02)" : "rgba(31,35,40,0.03)";
+  const calendarSectionBg = tk.bg;
+  const railSectionBg = tk.surface1;
   const openTradeCard = {
-    background: tk.surface2,
+    background: dark ? "rgba(255,255,255,0.04)" : tk.surface2,
     border: `1px solid ${tk.borderSub}`,
     borderRadius: 12,
     padding: "10px 11px",
@@ -1292,23 +1272,20 @@ export default function App() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginBottom: isDesktop ? 14 : 18, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <div style={{ fontSize: 12, color: tk.text, fontWeight: 600, letterSpacing: "0.01em" }}>P/L Calendar</div>
-          {syncBadge}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginLeft: "auto" }}>
-          {currencyToggle}
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button
-            className="clickable-text"
             onClick={() => setCurrentMonth(p => { const d = new Date(p.y, p.m - 1); return { y: d.getFullYear(), m: d.getMonth() }; })}
-            style={{ ...headerAction, color: tk.textMid, fontSize: 21, lineHeight: 1, width: 14, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 400 }}
+            style={{ ...headerAction, color: tk.textMid, width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}
+            aria-label="Previous month"
           >
-            ‹
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14.2893 5.70708C13.8988 5.31655 13.2657 5.31655 12.8751 5.70708L7.98768 10.5993C7.20729 11.3805 7.2076 12.6463 7.98837 13.427L12.8787 18.3174C13.2693 18.7079 13.9024 18.7079 14.293 18.3174C14.6835 17.9269 14.6835 17.2937 14.293 16.9032L10.1073 12.7175C9.71678 12.327 9.71678 11.6939 10.1073 11.3033L14.2893 7.12129C14.6799 6.73077 14.6799 6.0976 14.2893 5.70708Z" fill="currentColor"/></svg>
           </button>
           <span style={{ fontFamily: sans, fontWeight: 500, fontSize: 13, color: tk.text, minWidth: 88, textAlign: "center" }}>
             {monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}
           </span>
           <button
-            className={isCurrentMonth ? undefined : "clickable-text"}
             onClick={() => {
               if (isCurrentMonth) return;
               setCurrentMonth(p => { const d = new Date(p.y, p.m + 1); return { y: d.getFullYear(), m: d.getMonth() }; });
@@ -1316,19 +1293,14 @@ export default function App() {
             disabled={isCurrentMonth}
             style={{
               ...headerAction,
-              color: isCurrentMonth ? tk.textDim : tk.textMid,
-              fontSize: 21,
-              lineHeight: 1,
-              width: 14,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 400,
-              opacity: isCurrentMonth ? 0.42 : 1,
+              color: isCurrentMonth ? tk.textFaint : tk.textMid,
+              width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+              opacity: isCurrentMonth ? 0.35 : 1,
               cursor: isCurrentMonth ? "default" : "pointer",
             }}
+            aria-label="Next month"
           >
-            ›
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ transform: "scaleX(-1)" }}><path d="M14.2893 5.70708C13.8988 5.31655 13.2657 5.31655 12.8751 5.70708L7.98768 10.5993C7.20729 11.3805 7.2076 12.6463 7.98837 13.427L12.8787 18.3174C13.2693 18.7079 13.9024 18.7079 14.293 18.3174C14.6835 17.9269 14.6835 17.2937 14.293 16.9032L10.1073 12.7175C9.71678 12.327 9.71678 11.6939 10.1073 11.3033L14.2893 7.12129C14.6799 6.73077 14.6799 6.0976 14.2893 5.70708Z" fill="currentColor"/></svg>
           </button>
         </div>
         </div>
@@ -1339,8 +1311,8 @@ export default function App() {
           <div style={{ fontSize: isDesktop ? 22 : 22, fontWeight: 700, color: fmtColor(monthTotal), lineHeight: 1, marginBottom: 8, letterSpacing: "-0.01em" }}>
             {fmtCalendarValue(monthTotal)}
           </div>
-          <div style={{ height: 5, borderRadius: 999, background: tk.border, marginBottom: 10, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${winRatio * 100}%`, background: green, borderRadius: 999 }} />
+          <div style={{ height: 2, borderRadius: 0, background: tk.borderSub, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${winRatio * 100}%`, background: dark ? "#ffffff" : "#0f0f0f", borderRadius: 0 }} />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontFamily: sans, fontWeight: 500 }}>
             <span style={{ color: green }}>{monthWins.length} {monthWins.length === 1 ? "profitable day" : "profitable days"} · {fmtCalendarValue(monthWinTotal, true)}</span>
@@ -1408,18 +1380,13 @@ export default function App() {
               }}
               onMouseLeave={() => setCalendarHover(null)}
               style={{
-              borderRadius: isDesktop ? 6 : 4, minHeight: minH, padding: isDesktop ? "8px 10px" : "8px 9px",
-              background: bg,
-              border: `${isSel ? "1.5px" : "1px"} solid ${isDesktop ? "transparent" : border}`,
-              cursor: "pointer", display: "flex", flexDirection: "column", justifyContent: "space-between",
-              boxShadow: isSel
-                ? `0 0 0 1px ${border}, 0 10px 22px ${dark ? "rgba(0,0,0,0.18)" : "rgba(31,35,40,0.08)"}`
-                : isDesktop
-                ? `inset 0 0 0 1px ${dark ? "rgba(255,255,255,0.02)" : "rgba(31,35,40,0.03)"}`
-                : "none",
-              outline: "none",
-              transition: "transform 140ms ease, filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease",
-            }}
+                borderRadius: 0, minHeight: minH, padding: isDesktop ? "8px 10px" : "8px 9px",
+                background: bg,
+                border: `1px solid ${isSel ? border : isDesktop ? "transparent" : border}`,
+                outline: isSel ? `1px solid ${border}` : "none",
+                cursor: "pointer", display: "flex", flexDirection: "column", justifyContent: "space-between",
+                boxShadow: "none",
+              }}
             >
               <span className="calendar-session-day" style={{ fontSize: 11, color: tk.textDim }}>{day}</span>
               <span className="calendar-session-value" style={{ fontSize: isDesktop ? 15 : 12, fontWeight: 500, color: valueColor, textAlign: "center", display: "block", letterSpacing: "-0.015em", lineHeight: 1.1 }}>
@@ -1468,6 +1435,7 @@ export default function App() {
         </div>
       )}
 
+
       {!isDesktop && sessions.length > 0 && (
         <div style={{ display: "flex", gap: 7, marginTop: isDesktop ? 12 : 14, flexWrap: "wrap", flexShrink: 0 }}>
           <span style={{ background: tk.surface2, border: `1px solid ${tk.border}`, borderRadius: 4, padding: "4px 10px", fontSize: 12, fontFamily: sans, color: tk.textMid }}>
@@ -1493,8 +1461,8 @@ export default function App() {
               <div style={{ fontSize: 11, color: tk.textDim, marginTop: 2 }}>/ 100</div>
             </div>
           </div>
-          <div style={{ height: 7, borderRadius: 999, background: tk.border, overflow: "hidden", marginBottom: 12 }}>
-            <div style={{ height: "100%", width: `${missionStats.score}%`, background: missionStats.ready ? green : accent, borderRadius: 999 }} />
+          <div style={{ height: 2, borderRadius: 0, background: tk.borderSub, overflow: "hidden", marginBottom: 12 }}>
+            <div style={{ height: "100%", width: `${missionStats.score}%`, background: dark ? "#ffffff" : "#0f0f0f", borderRadius: 0 }} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: isDesktop ? "repeat(4, 1fr)" : "repeat(2, 1fr)", gap: 8 }}>
             {missionStats.items.map(item => (
@@ -1517,7 +1485,7 @@ export default function App() {
   );
 
   const insightRail = (
-    <aside style={{ display: "flex", flexDirection: "column", gap: 0, height: isDesktop ? "100%" : "auto", overflowY: isDesktop ? "auto" : "visible", paddingRight: isDesktop ? 0 : 0, borderLeft: isDesktop ? `1px solid ${tk.border}` : "none", background: railSectionBg }}>
+    <aside style={{ display: "flex", flexDirection: "column", gap: 0, height: isDesktop ? "100%" : "auto", overflowY: isDesktop ? "auto" : "visible", borderLeft: isDesktop ? `1px solid ${tk.borderSub}` : "none", background: railSectionBg }}>
 
       {openTrades.length > 0 && (
         <div style={{ padding: sectionPad, borderBottom: `1px solid ${tk.borderSub}` }}>
@@ -1672,8 +1640,8 @@ export default function App() {
                 <span style={{ fontSize: 12, fontWeight: 700, color: item.done ? green : tk.text }}>{item.label}</span>
                 <span style={{ fontSize: 11, color: item.done ? green : tk.textDim }}>{item.done ? "✓" : Math.round(item.progress * 100) + "%"}</span>
               </div>
-              <div style={{ height: 5, background: tk.border, borderRadius: 999, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${Math.round(item.progress * 100)}%`, background: item.done ? green : accent, borderRadius: 999 }} />
+              <div style={{ height: 2, background: tk.borderSub, borderRadius: 0, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${Math.round(item.progress * 100)}%`, background: dark ? "#ffffff" : "#0f0f0f", borderRadius: 0 }} />
               </div>
               <div style={{ fontSize: 11, color: item.done ? green : tk.textMid, marginTop: 7 }}>{item.value}</div>
             </div>
@@ -2023,7 +1991,7 @@ export default function App() {
         <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
         <div style={{ display: "flex", gap: 7 }}>
           {ACCENT_PRESETS.map(p => (
-            <button key={p.key} title={p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ width: 24, height: 24, borderRadius: "50%", background: p.base, border: accentKey === p.key ? `2.5px solid ${tk.text}` : "2.5px solid transparent", outline: "none", cursor: "pointer", padding: 0, flexShrink: 0, boxShadow: accentKey === p.key ? `0 0 0 3px ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"}` : "none" }} />
+            <button key={p.key} title={p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ width: 24, height: 24, borderRadius: "50%", background: p.swatch || p.base, border: accentKey === p.key ? `2.5px solid ${tk.text}` : p.swatch ? `2.5px solid ${dark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.20)"}` : "2.5px solid transparent", outline: "none", cursor: "pointer", padding: 0, flexShrink: 0, boxShadow: accentKey === p.key ? `0 0 0 3px ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"}` : "none" }} />
           ))}
         </div>
       </div>
@@ -2040,7 +2008,7 @@ export default function App() {
   );
   const settingsIconBtn = (
     <div ref={settingsWrapperRef} style={{ position: "relative" }}>
-      <button className="ui-interactive-button" onClick={() => setSettingsPanelOpen(v => !v)} aria-label="Settings" style={{ ...headerButton, padding: "5px 7px", color: settingsPanelOpen ? accent : tk.textDim, display: "flex", alignItems: "center" }}>
+      <button className="ui-interactive-button" onClick={() => setSettingsPanelOpen(v => !v)} aria-label="Settings" style={{ ...headerButton, padding: "5px 7px", color: settingsPanelOpen ? (dark ? "#ffffff" : tk.text) : tk.textDim, display: "flex", alignItems: "center" }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path fillRule="evenodd" clipRule="evenodd" d="M12 8.25C9.92894 8.25 8.25 9.92893 8.25 12C8.25 14.0711 9.92894 15.75 12 15.75C14.0711 15.75 15.75 14.0711 15.75 12C15.75 9.92893 14.0711 8.25 12 8.25ZM9.75 12C9.75 10.7574 10.7574 9.75 12 9.75C13.2426 9.75 14.25 10.7574 14.25 12C14.25 13.2426 13.2426 14.25 12 14.25C10.7574 14.25 9.75 13.2426 9.75 12Z" fill="currentColor"/>
           <path fillRule="evenodd" clipRule="evenodd" d="M11.9747 1.25C11.5303 1.24999 11.1592 1.24999 10.8546 1.27077C10.5375 1.29241 10.238 1.33905 9.94761 1.45933C9.27379 1.73844 8.73843 2.27379 8.45932 2.94762C8.31402 3.29842 8.27467 3.66812 8.25964 4.06996C8.24756 4.39299 8.08454 4.66251 7.84395 4.80141C7.60337 4.94031 7.28845 4.94673 7.00266 4.79568C6.64714 4.60777 6.30729 4.45699 5.93083 4.40743C5.20773 4.31223 4.47642 4.50819 3.89779 4.95219C3.64843 5.14353 3.45827 5.3796 3.28099 5.6434C3.11068 5.89681 2.92517 6.21815 2.70294 6.60307L2.67769 6.64681C2.45545 7.03172 2.26993 7.35304 2.13562 7.62723C1.99581 7.91267 1.88644 8.19539 1.84541 8.50701C1.75021 9.23012 1.94617 9.96142 2.39016 10.5401C2.62128 10.8412 2.92173 11.0602 3.26217 11.2741C3.53595 11.4461 3.68788 11.7221 3.68786 12C3.68785 12.2778 3.53592 12.5538 3.26217 12.7258C2.92169 12.9397 2.62121 13.1587 2.39007 13.4599C1.94607 14.0385 1.75012 14.7698 1.84531 15.4929C1.88634 15.8045 1.99571 16.0873 2.13552 16.3727C2.26983 16.6469 2.45535 16.9682 2.67758 17.3531L2.70284 17.3969C2.92507 17.7818 3.11058 18.1031 3.28089 18.3565C3.45817 18.6203 3.64833 18.8564 3.89769 19.0477C4.47632 19.4917 5.20763 19.6877 5.93073 19.5925C6.30717 19.5429 6.647 19.3922 7.0025 19.2043C7.28833 19.0532 7.60329 19.0596 7.8439 19.1986C8.08452 19.3375 8.24756 19.607 8.25964 19.9301C8.27467 20.3319 8.31403 20.7016 8.45932 21.0524C8.73843 21.7262 9.27379 22.2616 9.94761 22.5407C10.238 22.661 10.5375 22.7076 10.8546 22.7292C11.1592 22.75 11.5303 22.75 11.9747 22.75H12.0252C12.4697 22.75 12.8407 22.75 13.1454 22.7292C13.4625 22.7076 13.762 22.661 14.0524 22.5407C14.7262 22.2616 15.2616 21.7262 15.5407 21.0524C15.686 20.7016 15.7253 20.3319 15.7403 19.93C15.7524 19.607 15.9154 19.3375 16.156 19.1985C16.3966 19.0596 16.7116 19.0532 16.9974 19.2042C17.3529 19.3921 17.6927 19.5429 18.0692 19.5924C18.7923 19.6876 19.5236 19.4917 20.1022 19.0477C20.3516 18.8563 20.5417 18.6203 20.719 18.3565C20.8893 18.1031 21.0748 17.7818 21.297 17.3969L21.3223 17.3531C21.5445 16.9682 21.7301 16.6468 21.8644 16.3726C22.0042 16.0872 22.1135 15.8045 22.1546 15.4929C22.2498 14.7697 22.0538 14.0384 21.6098 13.4598C21.3787 13.1586 21.0782 12.9397 20.7378 12.7258C20.464 12.5538 20.3121 12.2778 20.3121 11.9999C20.3121 11.7221 20.464 11.4462 20.7377 11.2742C21.0783 11.0603 21.3788 10.8414 21.6099 10.5401C22.0539 9.96149 22.2499 9.23019 22.1547 8.50708C22.1136 8.19546 22.0043 7.91274 21.8645 7.6273C21.7302 7.35313 21.5447 7.03183 21.3224 6.64695L21.2972 6.60318C21.0749 6.21825 20.8894 5.89688 20.7191 5.64347C20.5418 5.37967 20.3517 5.1436 20.1023 4.95225C19.5237 4.50826 18.7924 4.3123 18.0692 4.4075C17.6928 4.45706 17.353 4.60782 16.9975 4.79572C16.7117 4.94679 16.3967 4.94036 16.1561 4.80144C15.9155 4.66253 15.7524 4.39297 15.7403 4.06991C15.7253 3.66808 15.686 3.2984 15.5407 2.94762C15.2616 2.27379 14.7262 1.73844 14.0524 1.45933C13.762 1.33905 13.4625 1.29241 13.1454 1.27077C12.8407 1.24999 12.4697 1.24999 12.0252 1.25H11.9747ZM10.5216 2.84515C10.5988 2.81319 10.716 2.78372 10.9567 2.76729C11.2042 2.75041 11.5238 2.75 12 2.75C12.4762 2.75 12.7958 2.75041 13.0432 2.76729C13.284 2.78372 13.4012 2.81319 13.4783 2.84515C13.7846 2.97202 14.028 3.21536 14.1548 3.52165C14.1949 3.61826 14.228 3.76887 14.2414 4.12597C14.271 4.91835 14.68 5.68129 15.4061 6.10048C16.1321 6.51968 16.9974 6.4924 17.6984 6.12188C18.0143 5.9549 18.1614 5.90832 18.265 5.89467C18.5937 5.8514 18.9261 5.94047 19.1891 6.14228C19.2554 6.19312 19.3395 6.27989 19.4741 6.48016C19.6125 6.68603 19.7726 6.9626 20.0107 7.375C20.2488 7.78741 20.4083 8.06438 20.5174 8.28713C20.6235 8.50382 20.6566 8.62007 20.6675 8.70287C20.7108 9.03155 20.6217 9.36397 20.4199 9.62698C20.3562 9.70995 20.2424 9.81399 19.9397 10.0041C19.2684 10.426 18.8122 11.1616 18.8121 11.9999C18.8121 12.8383 19.2683 13.574 19.9397 13.9959C20.2423 14.186 20.3561 14.29 20.4198 14.373C20.6216 14.636 20.7107 14.9684 20.6674 15.2971C20.6565 15.3799 20.6234 15.4961 20.5173 15.7128C20.4082 15.9355 20.2487 16.2125 20.0106 16.6249C19.7725 17.0373 19.6124 17.3139 19.474 17.5198C19.3394 17.72 19.2553 17.8068 19.189 17.8576C18.926 18.0595 18.5936 18.1485 18.2649 18.1053C18.1613 18.0916 18.0142 18.045 17.6983 17.8781C16.9973 17.5075 16.132 17.4803 15.4059 17.8995C14.68 18.3187 14.271 19.0816 14.2414 19.874C14.228 20.2311 14.1949 20.3817 14.1548 20.4784C14.028 20.7846 13.7846 21.028 13.4783 21.1549C13.4012 21.1868 13.284 21.2163 13.0432 21.2327C12.7958 21.2496 12.4762 21.25 12 21.25C11.5238 21.25 11.2042 21.2496 10.9567 21.2327C10.716 21.2163 10.5988 21.1868 10.5216 21.1549C10.2154 21.028 9.97201 20.7846 9.84514 20.4784C9.80512 20.3817 9.77195 20.2311 9.75859 19.874C9.72896 19.0817 9.31997 18.3187 8.5939 17.8995C7.86784 17.4803 7.00262 17.5076 6.30158 17.8781C5.98565 18.0451 5.83863 18.0917 5.73495 18.1053C5.40626 18.1486 5.07385 18.0595 4.81084 17.8577C4.74458 17.8069 4.66045 17.7201 4.52586 17.5198C4.38751 17.314 4.22736 17.0374 3.98926 16.625C3.75115 16.2126 3.59171 15.9356 3.4826 15.7129C3.37646 15.4962 3.34338 15.3799 3.33248 15.2971C3.28921 14.9684 3.37828 14.636 3.5801 14.373C3.64376 14.2901 3.75761 14.186 4.0602 13.9959C4.73158 13.5741 5.18782 12.8384 5.18786 12.0001C5.18791 11.1616 4.73165 10.4259 4.06021 10.004C3.75769 9.81389 3.64385 9.70987 3.58019 9.62691C3.37838 9.3639 3.28931 9.03149 3.33258 8.7028C3.34348 8.62001 3.37656 8.50375 3.4827 8.28707C3.59181 8.06431 3.75125 7.78734 3.98935 7.37493C4.22746 6.96253 4.3876 6.68596 4.52596 6.48009C4.66055 6.27983 4.74468 6.19305 4.81093 6.14222C5.07395 5.9404 5.40636 5.85133 5.73504 5.8946C5.83873 5.90825 5.98576 5.95483 6.30173 6.12184C7.00273 6.49235 7.86791 6.51962 8.59394 6.10045C9.31998 5.68128 9.72896 4.91837 9.75859 4.12602C9.77195 3.76889 9.80512 3.61827 9.84514 3.52165C9.97201 3.21536 10.2154 2.97202 10.5216 2.84515Z" fill="currentColor"/>
@@ -2075,10 +2043,12 @@ export default function App() {
         gap: 5,
         whiteSpace: "nowrap",
         flexShrink: 0,
-        padding: "7px 10px",
-        background: balanceModalOpen || balanceHover ? (dark ? "rgba(255,255,255,0.05)" : "rgba(15,23,42,0.04)") : "transparent",
-        border: `1px solid ${balanceModalOpen || balanceHover ? tk.border : "transparent"}`,
-        transition: "background 0.16s ease, border-color 0.16s ease",
+        padding: balanceModalOpen || balanceHover ? "5px 8px" : "5px 8px 5px 0",
+        marginLeft: balanceModalOpen || balanceHover ? `-8px` : "0",
+        background: balanceModalOpen || balanceHover ? (dark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.05)") : "transparent",
+        border: "none",
+        borderRadius: 5,
+        transition: "background 0.14s ease",
       }}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}><path fillRule="evenodd" clipRule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solGradH)"/><defs><linearGradient id="solGradH" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stopColor="#9945FF"/><stop offset="0.24" stopColor="#8752F3"/><stop offset="0.465" stopColor="#5497D5"/><stop offset="0.6" stopColor="#43B4CA"/><stop offset="0.735" stopColor="#28E0B9"/><stop offset="1" stopColor="#19FB9B"/></linearGradient></defs></svg>
@@ -2177,15 +2147,18 @@ export default function App() {
 
   // ── Header ─────────────────────────────────────────────────────────────────
   const appHeader = (
-    <header style={{ borderBottom: `1px solid ${tk.border}`, position: "sticky", top: 0, background: tk.modalBg, backdropFilter: "blur(18px)", zIndex: 100, fontFamily: sans }}>
+    <header style={{ borderBottom: `1px solid ${dark ? tk.borderSub : tk.border}`, position: "sticky", top: 0, background: dark ? tk.bg : tk.modalBg, zIndex: 100, fontFamily: sans }}>
       <div style={{ height: isDesktop ? 54 : 56, maxWidth: 1180, margin: "0 auto", padding: `0 ${shellPadX}px` }}>
         {isDesktop ? (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", height: "100%", alignItems: "stretch" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, padding: `0 ${sectionPad}px` }}>
-              {headerPnl}
-              {isAdmin && <button className="ui-interactive-button" onClick={() => { void loadInvitePanel(); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 0, padding: `0 ${sectionPad}px` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {headerPnl}
+                {isAdmin && <button className="ui-interactive-button" onClick={() => { void loadInvitePanel(); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
+              </div>
+              {currencyToggle}
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderLeft: `1px solid ${tk.border}`, padding: `0 ${sectionPad}px`, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderLeft: `1px solid ${dark ? tk.borderSub : tk.border}`, padding: `0 ${sectionPad}px`, minWidth: 0 }}>
               {profileTrigger}
               {settingsIconBtn}
             </div>
@@ -2218,7 +2191,7 @@ export default function App() {
         bottom: 0,
         left: `max(${shellPadX}px, calc((100vw - 1180px) / 2 + ${shellPadX}px))`,
         width: 1,
-        background: tk.border,
+        background: tk.borderSub,
         pointerEvents: "none",
         zIndex: 150,
       }}
@@ -2233,7 +2206,7 @@ export default function App() {
         bottom: 0,
         right: `max(${shellPadX}px, calc((100vw - 1180px) / 2 + ${shellPadX}px))`,
         width: 1,
-        background: tk.border,
+        background: tk.borderSub,
         pointerEvents: "none",
         zIndex: 150,
       }}

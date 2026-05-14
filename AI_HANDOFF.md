@@ -1,8 +1,46 @@
 # Trading Dashboard — Developer Handoff
 
-_LLM-optimized. Feed this file at the start of any new session. Update whenever architecture, trade-flow behavior, or data model changes._
+## What this file is and how to maintain it
 
-Last updated: 2026-05-14 (security + reliability hardening pass)
+This file exists so that a new AI assistant — with no memory of prior sessions — can pick up exactly where the last one left off. It is not documentation for humans and it is not a summary of the codebase. An AI can read the code itself. This file captures only things that are **non-obvious, hard to derive from reading files, or would cost significant time to rediscover**:
+
+- Decisions that were made and the reason behind them
+- Constraints the user has set that override defaults
+- Gotchas and fragile spots that have already caused bugs
+- The mental model needed to understand why the system works the way it does
+
+**Do not add to this file:**
+- Things that are obvious from reading the code
+- Things that are covered by standard conventions
+- Progress logs or changelogs — those belong in git
+- Anything that will go stale quickly without being maintained
+
+**Do add to this file** any time you make a non-obvious architectural decision, discover a fragile dependency, change the data model, or learn something about how the user wants to work. Update in the same task, not at the end of the session.
+
+Last updated: 2026-05-14
+
+---
+
+## Skills and tools available
+
+A set of Claude Code skills are installed in `.claude/skills/`. Always check whether a skill is relevant before starting **any** task — UI, backend, architecture, refactoring, or testing. They contain specialized knowledge that improves output quality and should be used proactively, not just when the user asks.
+
+**When to use each skill:**
+
+| Skill | Invoke when |
+|---|---|
+| `ui-ux-pro-max` | Any visual/UI work — layout, spacing, interaction states, component design |
+| `ui-design-system` | Creating or auditing UI tokens, new component patterns, design consistency review |
+| `react-best-practices` | Performance optimization, refactoring React components, avoiding re-render issues |
+| `senior-architect` | Architectural decisions, system design, evaluating tech trade-offs |
+| `senior-backend` | API design, Supabase query optimization, auth flows |
+| `code-reviewer` | Pre-commit review, security scan, quality check |
+| `mcp-builder` | Building MCP servers for external API integrations |
+| `webapp-testing` | UI testing with Playwright, verifying feature behavior in browser |
+
+**Always invoke `ui-ux-pro-max` for any UI work.** This is a hard requirement from the user.
+
+The full design system for the project is documented in **[DESIGN_SYSTEM.md](DESIGN_SYSTEM.md)**. Read it before introducing any new visual element. It covers all color tokens, typography, spacing, radius rules, component patterns, and a new-element checklist.
 
 ---
 
@@ -21,6 +59,24 @@ Last updated: 2026-05-14 (security + reliability hardening pass)
 1. **Buy/sell must always work and record correctly.** A failed or wrong trade record makes the tool worthless.
 2. **Market cap values must reflect what the user saw.** DOM-first capture exists for this — it's intentional, not a hack.
 3. **Data must never be lost.** Open positions survive page reloads, offline periods, and extension restarts.
+
+---
+
+## Design principles
+
+These are not aesthetic preferences — they are the reasoning the user has consistently applied and will push back on if violated.
+
+**Color carries meaning, not decoration.** Accent color (green) is reserved for things that are informational: P/L values, win/loss indicators, live position state. It must not be used on structural UI elements like progress bar fills, active icon states, or hover effects where the color adds no information. Those should be white/neutral.
+
+**Black and white, not black and grey.** The palette is `#0C0D10` background against white text. Primary text is `#FFFFFF`, secondary is `#E2E4EA`, tertiary is `#B0B6C2`. Do not introduce additional grey steps or muted tones. Surfaces should be solid near-black colors, not semi-transparent overlays. Drop shadows on inline content panels are not used. Floating elements (modals, tooltips, dropups) may have shadows to indicate elevation.
+
+**Sharp where the UI is sharp.** Border radius should match the nature of the element. The calendar grid, progress bars, and structural dividers are inherently rectilinear — use `0` or very small radius. Cards and floating elements in the right rail can use moderate radius. Do not apply `borderRadius: 999` (pill) to anything that is not a pill by nature.
+
+**Lines and dividers are structural, not decorative.** Vertical and horizontal dividers throughout the layout use the same single color (`tk.borderSub`). Do not vary divider color or weight for visual interest.
+
+**No over-designed interaction states.** Hover effects should be minimal — a subtle opacity change is enough. Do not add brightness filters, box-shadow transitions, or color shifts on hover for calendar cells or icon buttons. Active/selected state for icons uses white, not the accent color.
+
+**No drop shadows on icons.** Icon active states use color only (white), never `filter: drop-shadow` or `box-shadow`.
 
 ---
 
@@ -314,7 +370,7 @@ The dashboard requests balance on load and on tab focus. `td_virtual_balance` is
 
 **Trade grouping in session modal:** trades are grouped by `tokenName` before display. Multiple partial sells on the same token show as one row. `__TD_OPEN__` placeholder rows are filtered from display (counted for fees but not shown as completed trades). Relevant: `displayTradeGroups` computed value around line 765.
 
-**Theme system:** `ACCENT_PRESETS` at top of `App.jsx` — 5 presets (`axiom`, `amber`, `teal`, `violet`, `rose`). Each has `base`, `dim`, and a full `dark` color override. Active preset persisted to `localStorage` under `posture_accent_key`. Light mode always uses `THEME.light` — accent presets only affect dark mode.
+**Theme system:** `ACCENT_PRESETS` at top of `App.jsx` — 5 presets (`axiom`, `amber`, `teal`, `violet`, `rose`). Each has `base`, `dim`, `rgb` (comma-separated for CSS rgba), `headerBg`, and a full `dark` color override. Active preset persisted to `localStorage` under `posture_accent_key`. Light mode always uses `THEME.light` — accent presets only affect dark mode. The `axiom` preset matches the extension exactly: accent `#50ff6c`, background `#0C0D10`, header `rgba(12,13,16,0.82)`.
 
 **Dashboard settings panel:** gear icon in header; contains theme, sign out (`signOutUser()`), and delete account (`deleteCurrentUser()` — calls `sb.rpc("delete_user")` then `sb.auth.signOut()`, gated behind `window.confirm`).
 
@@ -329,6 +385,8 @@ The dashboard requests balance on load and on tab focus. `td_virtual_balance` is
 
 - **Gear icon:** opens a floating popup (position: absolute) — not inline. Clicking outside closes it. Contains: theme toggle, virtual balance link, advanced trading toggle, sign out. Do not make this inline again.
 - **Gear icon CSS gotcha:** base `.td-overlay-icon-btn svg` applies `fill: none; stroke: currentColor`. The gear uses a fill-based SVG. Override on `.td-overlay-icon-btn-settings svg`: `fill: currentColor; stroke: none; stroke-width: 0`.
+- **Icon active/live states:** `.td-overlay-icon-btn.is-active` → white color + white drop-shadow glow. `.td-overlay-icon-btn.is-live` → slow breathing white glow animation (2.6s). The positions toggle gets `is-live` when `hasOpenPositions && !posNavOpen`. Defined in `overlay.css` with `@keyframes td-icon-breathe`.
+- **Drag:** uses `setPointerCapture` so pointer events are retained when moving fast over Axiom's page content. `renderUnlessEditing` skips re-renders while `dragState !== null`. The global `pointerup → schedulePageRefresh` listener is also gated on `!dragState`.
 - **Position summary** (Invested / Sold / Remaining / P/L): always visible when a position is open. Not gated.
 - **Stop loss / target sell inputs:** only shown when `state.advancedTrading === true`.
 - **Balance tooltip** ("Add more SOL"): appears **above** the balance, not below. `bottom: calc(100% + 7px)`.
@@ -366,14 +424,51 @@ When a localhost dashboard tab is already open, the extension prefers it over pr
 
 ## Roadmap
 
-### Up next
-- **Dashboard polish + attention to detail** — loading treatments, tighter modal/button states, clearer empty/error/success surfaces, and cleaner async feedback without changing the core product shape.
-- **Closer Axiom simulation** — move this up immediately after the polish pass: richer live-trade context, clearer simulation audit trail, and stronger parity between dashboard and extension state presentation.
-- **Extension ↔ dashboard sync edge cases** — reload, new tab, extension restart. The happy path works; edge cases are untested.
+### Guiding principle
 
-### Medium-term
-- Replace DOM-scraping for MC with a real data feed (DexScreener WebSocket or Birdeye API) — more reliable, less fragile to Axiom DOM changes.
-- Use `pairAddress` as the canonical position key — more stable than `contractAddress` across token redeployments.
+**Reliability over features.** Buy/sell must work correctly 100% of the time. The core trade lifecycle is the single most important part of the system — simplify it aggressively. Data must never be lost. A user who doesn't trust that their trade was recorded will stop using the product.
+
+---
+
+### Phase 1 — Current focus (extension polish + reliability)
+
+Run these in parallel — polish without reliability is worthless.
+
+**Extension UI polish**
+- [ ] Tighten the buy/sell panel: reduce padding, slim inputs, sharper layout
+- [ ] Position row: make live P/L the dominant visual element; token name and entry details subordinate
+- [ ] Stop loss / target sell controls: move behind "Advanced" collapsible — keep the main view clean
+- [ ] Sell buttons: clearer visual hierarchy between "Sell 25%" / "Sell 50%" / "Sell 100%"
+- [ ] Balance display: compact, always accurate
+
+**Reliability**
+- [ ] Every buy/sell/close must show clear, immediate feedback in the overlay — no silent failures
+- [ ] Stop loss and target sell always fire reliably in all auto-exit scenarios
+- [ ] Consistent extension ↔ dashboard sync — cover edge cases (reload, new tab, extension restart, offline flush)
+- [ ] Contract address (CA) visible everywhere and synced — first-class field in open-note payload
+
+---
+
+### Phase 2 — Pre-launch (before first external users)
+
+These three must be done before inviting anyone in:
+
+- [ ] **Onboarding flow in extension** — new user must understand balance setup and what the overlay does before hitting buy for the first time
+- [ ] **Dashboard empty state** — first open should guide the user forward, not show a blank calendar
+- [ ] **DexScreener WebSocket as primary MC source** — DOM scraping is too fragile to expose to others. A single Axiom deploy can break MC capture for all users simultaneously. This is the biggest unmitigated risk in the product. Promoted from medium-term.
+
+---
+
+### Phase 3 — Retention (5–10 active users)
+
+- [ ] **Guided session reflection** — make good/bad notes more structured or prompted; they are the most valuable data in the product
+- [ ] **Weekly summary** — email or notification with trades, win rate, and a focus area for the week
+- [ ] **Rule compliance as primary metric** — position this above P/L in the dashboard hierarchy; it is the core product narrative
+
+---
 
 ### Long-term
-- Deeper Axiom simulation fidelity: slippage, priority fees, realistic fill modeling once the closer dashboard/extension simulation loop feels solid.
+
+- Use `pairAddress` as the canonical position key — more stable than token name across redeployments
+- Replicate full Axiom trading conditions: slippage settings, priority fees, realistic fill simulation
+- Social/competitive layer — opt-in anonymous leaderboard of win rates and rule compliance; natural retention mechanic for a community-driven space

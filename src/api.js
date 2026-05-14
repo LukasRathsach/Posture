@@ -115,16 +115,15 @@ export async function loadSessions(userId) {
 export async function saveSessions(userId, sessions) {
   const { error } = await getSupabase()
     .from("user_sessions")
-    .upsert({
-      user_id: userId,
-      sessions,
-      updated_at: new Date().toISOString(),
-    });
+    .upsert(
+      { user_id: userId, sessions, updated_at: new Date().toISOString() },
+      { onConflict: "user_id" }
+    );
 
   if (error) throw error;
 }
 
-export async function loadPaperTrades(userId) {
+async function loadAllPaperTrades(userId) {
   const { data, error } = await getSupabase()
     .from("user_paper_trades")
     .select("id, token_name, pnl_sol, pnl_percentage, entry_market_cap, exit_market_cap, notes, trade_timestamp")
@@ -147,6 +146,38 @@ export async function loadPaperTrades(userId) {
       timestamp: trade.trade_timestamp ? new Date(trade.trade_timestamp).getTime() : Date.now(),
     };
   });
+}
+
+export async function loadClosedAndOpenPaperTrades(userId) {
+  const all = await loadAllPaperTrades(userId);
+  const closed = all.filter(t => !(t.notes || "").startsWith(OPEN_TRADE_NOTE_PREFIX) && !t.closeMeta === false || t.closeMeta);
+  const open = all
+    .map(trade => ({ trade, parsed: parseOpenTradeNote(trade.notes || "", trade) }))
+    .filter(entry => entry.parsed)
+    .map(({ trade, parsed }) => ({
+      id: trade.id,
+      positionId: parsed.positionId,
+      tokenName: parsed.tokenName,
+      positionSizeSol: parsed.positionSizeSol,
+      initialSizeSol: parsed.initialSizeSol,
+      entryMarketCap: parsed.entryMarketCap,
+      realizedPnlSol: parsed.realizedPnlSol,
+      openedAt: parsed.openedAt,
+      pageUrl: parsed.pageUrl,
+      marketCapSource: parsed.marketCapSource,
+      contractAddress: parsed.contractAddress,
+      pairAddress: parsed.pairAddress,
+      stopLossPct: parsed.stopLossPct,
+      stopLossMode: parsed.stopLossMode,
+      stopLossMarketCap: parsed.stopLossMarketCap,
+      targetSellPct: parsed.targetSellPct,
+      targetSellMode: parsed.targetSellMode,
+      targetSellMarketCap: parsed.targetSellMarketCap,
+      entryCapture: parsed.entryCapture || null,
+      lastCapture: parsed.lastCapture || null,
+      events: parsed.events || [],
+    }));
+  return { closed, open };
 }
 
 const OPEN_TRADE_NOTE_PREFIX = tradeContract.OPEN_TRADE_NOTE_PREFIX;

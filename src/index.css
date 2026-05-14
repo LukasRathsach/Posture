@@ -1,11 +1,11 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { min-height: 100%; }
 html {
-  background: #0F172A;
+  background: #0c0d10;
 }
 body {
-  background: #0F172A;
-  color: #f4f4f5;
+  background: #0c0d10;
+  color: #f3f4f6;
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;
 }
@@ -16,7 +16,7 @@ button { transition: background 160ms ease, border-color 160ms ease, color 160ms
 }
 .ui-interactive-button:hover:not(:disabled) {
   filter: brightness(1.03);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 10px 20px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 10px 24px rgba(0, 0, 0, 0.2);
 }
 .ui-interactive-button:active:not(:disabled) {
   filter: brightness(0.99);
@@ -39,46 +39,30 @@ button,
   transition: color 160ms ease, opacity 160ms ease, filter 160ms ease;
 }
 .clickable-text:hover {
-  color: #eef1f8 !important;
+  color: #f3f4f6 !important;
   filter: brightness(1.06);
 }
 .currency-toggle:hover {
   background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 .streak-badge {
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, color 160ms ease, filter 160ms ease;
 }
-.calendar-session-cell,
-.calendar-session-day,
-.calendar-session-value,
-.calendar-session-count {
-  transition: background-color 160ms ease, color 160ms ease, filter 160ms ease, box-shadow 160ms ease, outline-color 160ms ease;
-}
-.calendar-session-cell:hover {
-  filter: brightness(1.06) saturate(1.04);
-}
-.calendar-session-cell:hover .calendar-session-day,
-.calendar-session-cell:hover .calendar-session-count {
-  color: rgba(235, 238, 247, 0.86) !important;
-}
-.calendar-session-cell:hover .calendar-session-value {
-  filter: brightness(1.12);
-}
 @media (min-width: 900px) {
   .calendar-session-cell:hover {
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    opacity: 0.88;
   }
 }
 input:focus, textarea:focus {
-  border-color: #F59E0B !important;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
+  border-color: #8fa1bf !important;
+  box-shadow: 0 0 0 3px rgba(143, 161, 191, 0.15);
 }
 input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-select option { background: #1d1d23; color: #eeeef2; }
+::-webkit-scrollbar-thumb { background: #2a3038; border-radius: 4px; }
+select option { background: #111317; color: #f3f4f6; }
 
 
 @keyframes slideInRight {

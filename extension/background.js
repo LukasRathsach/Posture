@@ -141,6 +141,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message?.url) return;
   if (message.type !== "td_open_dashboard_balance" && message.type !== "td_open_dashboard") return;
 
+  // Only allow URLs that resolve to a known dashboard origin
+  let targetOrigin;
+  try { targetOrigin = new URL(message.url).origin; } catch { return; }
+  if (!getDashboardOrigins().includes(targetOrigin)) return;
+
   (async () => {
     try {
       await openDashboardUrl(message.url);
@@ -225,8 +230,10 @@ async function pollPrice() {
   await chrome.storage.local.set({ [BG_PRICE_KEY]: priceMap });
 }
 
-// Poll every 30 seconds via alarms (reliable in MV3 service workers)
-chrome.alarms.create("price_poll", { periodInMinutes: 0.5 });
+// Only create alarm if it doesn't exist — avoids resetting the timer on every service worker restart
+chrome.alarms.get("price_poll", existing => {
+  if (!existing) chrome.alarms.create("price_poll", { periodInMinutes: 0.5 });
+});
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "price_poll") pollPrice();
 });

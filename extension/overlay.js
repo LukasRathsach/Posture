@@ -65,6 +65,7 @@
     forceOverlay: false,
     pairInfo: null,
     tokenMetadata: null,
+    dexData: null,
     solPriceUsd: null,
     livePairPriceNative: null,
     virtualBalance: 0,
@@ -88,17 +89,24 @@
   root.className = "td-overlay-root";
   document.documentElement.appendChild(root);
 
+  // One-time nonce shared with the injected page-world script so only genuine
+  // WebSocket frames (not spoofed postMessages from other page scripts) are processed.
+  const SOCKET_NONCE = crypto.randomUUID();
+
   function injectSocketHook() {
     if (document.getElementById("td-axiom-socket-hook")) return;
     const script = document.createElement("script");
     script.id = "td-axiom-socket-hook";
+    // Nonce is baked in at injection time; page scripts that didn't intercept
+    // the WebSocket can't know it and therefore can't spoof valid messages.
     script.textContent = `
       (() => {
         if (window.__TD_AXIOM_SOCKET_HOOK__) return;
         window.__TD_AXIOM_SOCKET_HOOK__ = true;
 
+        const nonce = ${JSON.stringify(SOCKET_NONCE)};
         const emit = payload => {
-          window.postMessage({ source: "td-axiom-socket", payload }, "*");
+          window.postMessage({ source: "td-axiom-socket", nonce, payload }, window.location.origin);
         };
 
         const wireSocket = socket => {
@@ -160,10 +168,11 @@
     }
   }
 
+  const VALID_TONES = new Set(["neutral", "good", "bad"]);
   function setStatus(message, tone) {
     clearTimeout(statusDismissTimer);
     state.status = message || "";
-    state.statusTone = tone || "neutral";
+    state.statusTone = VALID_TONES.has(tone) ? tone : "neutral";
     if (tone === "good" && message) {
       statusDismissTimer = window.setTimeout(() => {
         state.status = "";
@@ -499,6 +508,7 @@
 
   function renderUnlessEditing() {
     if (isAutomationEditing()) return;
+    if (dragState) return;
     render();
   }
 
@@ -1077,18 +1087,81 @@
   }
 
   function getEstimatedLiveMarketCapUsd() {
-    const supply = Number(state.tokenMetadata?.supply || state.pairInfo?.supply || 0);
-    const priceNative = Number(state.livePairPriceNative || state.tokenMetadata?.priceNative || 0);
-    // bgPrice is now a map: { [pairAddress]: { marketCapUsd, priceNative, solPriceUsd, ts } }
     const activePairAddress = state.detected?.pairAddress;
+    const livePriceNative = Number(state.livePairPriceNative || 0);
+
+    // Best path: scale DexScreener's seeded MC by the ratio of live WebSocket price to seed price.
+    // This gives instant MC on every WebSocket tick without needing token supply.
+    const dex = state.dexData?.pairAddress === activePairAddress ? state.dexData : null;
+    if (dex && dex.marketCapUsd > 0 && dex.priceNative > 0 && livePriceNative > 0) {
+      return dex.marketCapUsd * (livePriceNative / dex.priceNative);
+    }
+
+    // Second path: supply * priceNative * solPrice (legacy DOM-scraped supply)
+    const supply = Number(state.tokenMetadata?.supply || state.pairInfo?.supply || 0);
+    const priceNative = livePriceNative || Number(state.tokenMetadata?.priceNative || 0);
     const bgEntry = activePairAddress && state.bgPrice ? state.bgPrice[activePairAddress] : null;
     const solPriceUsd = Number(state.solPriceUsd || bgEntry?.solPriceUsd || 0);
     if (supply > 0 && priceNative > 0 && solPriceUsd > 0) {
       return supply * priceNative * solPriceUsd;
     }
-    // Fall back to background worker's last known market cap for this pair
+
+    // Fallback: background worker's last known MC
     const bgMC = Number(bgEntry?.marketCapUsd || 0);
     return bgMC > 0 ? bgMC : null;
+  }
+
+  let lastDexFetchPairAddress = null;
+  async function fetchDexScreenerPairInfo(pairAddress) {
+    if (!pairAddress || pairAddress === lastDexFetchPairAddress) return;
+    lastDexFetchPairAddress = pairAddress;
+    try {
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${pairAddress}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const pair = data?.pairs?.[0];
+      if (!pair) return;
+
+      const marketCapUsd = Number(pair.marketCap || pair.fdv || 0);
+      const priceNative = Number(pair.priceNative || 0);
+      const priceUsd = Number(pair.priceUsd || 0);
+      const solPriceUsd = priceNative > 0 && priceUsd > 0 ? priceUsd / priceNative : 0;
+
+      state.dexData = {
+        pairAddress,
+        symbol: pair.baseToken?.symbol || "",
+        name: pair.baseToken?.name || "",
+        contractAddress: pair.baseToken?.address || "",
+        marketCapUsd,
+        priceNative,
+        priceUsd,
+        solPriceUsd,
+        liquidity: Number(pair.liquidity?.usd || 0),
+        volume24h: Number(pair.volume?.h24 || 0),
+        priceChange24h: Number(pair.priceChange?.h24 || 0),
+        priceChange1h: Number(pair.priceChange?.h1 || 0),
+        priceChange5m: Number(pair.priceChange?.m5 || 0),
+        dexUrl: pair.url || "",
+        fetchedAt: Date.now(),
+      };
+
+      // Seed pairInfo.supply so WebSocket price ticks can derive MC instantly
+      if (marketCapUsd > 0 && priceUsd > 0) {
+        state.pairInfo = { ...(state.pairInfo || {}), supply: marketCapUsd / priceUsd, pairAddress };
+      }
+      if (solPriceUsd > 0) state.solPriceUsd = solPriceUsd;
+
+      // Seed bgPrice so it's available even before background worker fires
+      if (marketCapUsd > 0) {
+        const existing = state.bgPrice && typeof state.bgPrice === "object" ? { ...state.bgPrice } : {};
+        existing[pairAddress] = { marketCapUsd, priceNative, solPriceUsd, ts: Date.now() };
+        state.bgPrice = existing;
+        await chrome.storage.local.set({ [BG_PRICE_KEY]: existing });
+      }
+
+      renderUnlessEditing();
+      void maybeRunAutoExit("dex-seed");
+    } catch (_) {}
   }
 
   function getCurrentLivePnlPct(position) {
@@ -1147,21 +1220,39 @@
     }
   }
 
+  function getDisplayData() {
+    const dex = state.dexData?.pairAddress === (state.detected?.pairAddress || state.dexData?.pairAddress)
+      ? state.dexData : null;
+    const detected = state.detected;
+    return {
+      tokenName: dex?.symbol || detected?.tokenName || "Unknown",
+      tokenFullName: dex?.name || detected?.tokenFullName || null,
+      contractAddress: dex?.contractAddress || detected?.contractAddress || "",
+      pairAddress: dex?.pairAddress || detected?.pairAddress || "",
+      marketCapUsd: getEstimatedLiveMarketCapUsd() || dex?.marketCapUsd || detected?.marketCap || null,
+      priceChange5m: dex?.priceChange5m ?? null,
+      priceChange1h: dex?.priceChange1h ?? null,
+      priceChange24h: dex?.priceChange24h ?? null,
+      pageUrl: detected?.pageUrl || "",
+    };
+  }
+
   function shouldShowOverlay() {
     if (!config || !config.supabaseUrl || !config.supabaseAnonKey) return false;
     if (!state.enabled) return false;
     if (state.forceOverlay) return true;
     if (!state.detected?.isCoinPage) return false;
-    if (!state.detected?.tokenName || state.detected.tokenName === "Unknown") return false;
+    const dd = getDisplayData();
+    if (!dd.tokenName || dd.tokenName === "Unknown") return false;
     return true;
   }
 
   function isTradeReady(snapshot = state.detected) {
+    const dd = getDisplayData();
     return Boolean(
       snapshot?.isCoinPage &&
-      snapshot?.tokenName &&
-      snapshot.tokenName !== "Unknown" &&
-      Number(snapshot?.marketCap || 0) > 0
+      dd.tokenName && dd.tokenName !== "Unknown" &&
+      (Number(dd.marketCapUsd || 0) > 0 || Number(snapshot?.marketCap || 0) > 0)
     );
   }
 
@@ -1183,18 +1274,21 @@
 
   function startDrag(event) {
     if (event.target.closest("[data-refresh], [data-open-settings], [data-open-balance], [data-dashboard-link], [data-pos-nav], [data-pos-toggle]")) return;
+    event.preventDefault();
     dragState = {
       startX: event.clientX,
       startY: event.clientY,
       startLeft: state.position.left,
       startTop: state.position.top,
     };
+    try { root.setPointerCapture(event.pointerId); } catch (_) {}
     window.addEventListener("pointermove", onDragMove);
     window.addEventListener("pointerup", stopDrag);
   }
 
   function onDragMove(event) {
     if (!dragState) return;
+    event.preventDefault();
     state.position = clampPosition({
       left: dragState.startLeft + (event.clientX - dragState.startX),
       top: dragState.startTop + (event.clientY - dragState.startY),
@@ -1202,9 +1296,10 @@
     applyOverlayPosition();
   }
 
-  async function stopDrag() {
+  async function stopDrag(event) {
     if (!dragState) return;
     dragState = null;
+    try { if (event?.pointerId != null) root.releasePointerCapture(event.pointerId); } catch (_) {}
     window.removeEventListener("pointermove", onDragMove);
     window.removeEventListener("pointerup", stopDrag);
     await saveOverlayUiState();
@@ -1223,6 +1318,7 @@
     applyOverlayPosition();
 
     const currentPosition = getCurrentPosition();
+    const dd = getDisplayData();
     const solBalanceLabel = `${state.virtualBalance.toFixed(2)} SOL`;
     const tradeReady = isTradeReady();
 
@@ -1355,10 +1451,10 @@
           ${state.status ? `<div class="td-overlay-toast td-overlay-toast--${state.statusTone}" data-dismiss-toast>${esc(state.status)}</div>` : ""}
           <div class="td-overlay-head">
             <div style="display:flex;align-items:center;gap:4px">
-              <button class="td-overlay-icon-btn td-overlay-icon-btn-pos${state.posNavOpen ? " is-active" : ""}" type="button" data-pos-toggle aria-label="Toggle live trades">${listIcon}</button>
+              <button class="td-overlay-icon-btn td-overlay-icon-btn-pos${state.posNavOpen ? " is-active" : ""}${!state.posNavOpen && hasOpenPositions ? " is-live" : ""}" type="button" data-pos-toggle aria-label="Toggle live trades">${listIcon}</button>
               <button class="td-overlay-icon-btn" type="button" data-dashboard-link aria-label="Open dashboard">${statsIcon}</button>
             </div>
-            <button class="td-overlay-balance" type="button" data-open-balance style="display:flex;align-items:center;gap:5px">
+            <button class="td-overlay-balance" type="button" data-open-balance title="Open balance editor" aria-label="Open balance editor" style="display:flex;align-items:center;gap:5px">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path fill-rule="evenodd" clip-rule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solG)"/><defs><linearGradient id="solG" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stop-color="#9945FF"/><stop offset="0.24" stop-color="#8752F3"/><stop offset="0.465" stop-color="#5497D5"/><stop offset="0.6" stop-color="#43B4CA"/><stop offset="0.735" stop-color="#28E0B9"/><stop offset="1" stop-color="#19FB9B"/></linearGradient></defs></svg>
               ${solBalanceLabel}
               <span class="td-overlay-balance-tip">Add more SOL</span>
@@ -1421,6 +1517,27 @@
                   </div>
                 `;
               })()}
+              ${(() => {
+                const mc = dd.marketCapUsd;
+                const mcStr = mc ? (mc >= 1e9 ? `$${(mc/1e9).toFixed(2)}B` : mc >= 1e6 ? `$${(mc/1e6).toFixed(2)}M` : mc >= 1e3 ? `$${(mc/1e3).toFixed(0)}K` : `$${mc.toFixed(0)}`) : "";
+                const chg5m = dd.priceChange5m;
+                const chg1h = dd.priceChange1h;
+                const chgStr = chg5m !== null
+                  ? `<span style="color:${chg5m >= 0 ? "#4ade80" : "#f87171"}">${chg5m >= 0 ? "+" : ""}${chg5m.toFixed(1)}%</span><span style="color:var(--td-text-faint);font-size:9px"> 5m</span>`
+                  : chg1h !== null
+                  ? `<span style="color:${chg1h >= 0 ? "#4ade80" : "#f87171"}">${chg1h >= 0 ? "+" : ""}${chg1h.toFixed(1)}%</span><span style="color:var(--td-text-faint);font-size:9px"> 1h</span>`
+                  : "";
+                const ca = dd.contractAddress;
+                const shortCa = ca ? ca.slice(0, 4) + "…" + ca.slice(-4) : "";
+                return `<div class="td-overlay-coin-info">
+                  <div style="display:flex;align-items:center;gap:5px;min-width:0">
+                    <span class="td-overlay-coin-ticker">${esc(dd.tokenName)}</span>
+                    ${mcStr ? `<span class="td-overlay-coin-mc">${mcStr}</span>` : ""}
+                    ${chgStr ? `<span class="td-overlay-coin-chg">${chgStr}</span>` : ""}
+                  </div>
+                  ${ca ? `<button class="td-overlay-pos-ca-copy" type="button" data-copy-ca="${esc(ca)}" title="Copy contract address">${esc(shortCa)} <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ""}
+                </div>`;
+              })()}
               <div class="td-overlay-label">Buy</div>
               <div class="td-overlay-preset-grid">
                 ${BUY_PRESETS.map(value => {
@@ -1435,9 +1552,9 @@
 
               <div class="td-overlay-label">Sell</div>
               ${currentPosition ? (() => {
-                const ca = currentPosition.contractAddress || "";
+                const ca = currentPosition.contractAddress || dd.contractAddress || "";
                 const shortCa = ca ? ca.slice(0, 4) + "…" + ca.slice(-4) : "";
-                const fullName = currentPosition.tokenFullName || "";
+                const fullName = currentPosition.tokenFullName || dd.tokenFullName || "";
                 return `<div class="td-overlay-pos-token-header">
                   ${fullName ? `<span class="td-overlay-pos-token-fullname">${esc(fullName)}</span>` : ""}
                   ${ca ? `<button class="td-overlay-pos-ca-copy" type="button" data-copy-ca="${esc(ca)}" title="Copy contract address">${esc(shortCa)} <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ""}
@@ -1566,7 +1683,17 @@
           if (state.virtualBalance < totalRequired) {
             throw new Error(`Need ${totalRequired.toFixed(2)} SOL to cover size and fee.`);
           }
-          const snapshot = detectPageSnapshot();
+          const rawSnapshot = detectPageSnapshot();
+          const dex = state.dexData?.pairAddress === (rawSnapshot.pairAddress || state.dexData?.pairAddress) ? state.dexData : null;
+          const snapshot = {
+            ...rawSnapshot,
+            tokenName: dex?.symbol || rawSnapshot.tokenName,
+            tokenFullName: dex?.name || rawSnapshot.tokenFullName || null,
+            contractAddress: dex?.contractAddress || rawSnapshot.contractAddress || "",
+            pairAddress: dex?.pairAddress || rawSnapshot.pairAddress || "",
+            marketCap: rawSnapshot.marketCap || dex?.marketCapUsd || null,
+            marketCapSource: rawSnapshot.marketCap ? rawSnapshot.marketCapSource : (dex ? "dex-seed" : rawSnapshot.marketCapSource),
+          };
           state.detected = snapshot;
           sentryCrumb("trade", "BUY attempted", { token: snapshot.tokenName, ca: snapshot.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, size });
           if (!snapshot.marketCap) {
@@ -1805,6 +1932,7 @@
     window.addEventListener("message", event => {
       if (event.source !== window) return;
       if (event.data?.source !== "td-axiom-socket") return;
+      if (event.data?.nonce !== SOCKET_NONCE) return;
       handleSocketPayload(event.data.payload);
     });
 
@@ -1864,6 +1992,9 @@
       );
       if (coinChanged) {
         void loadOpenPositionsFromBackend().then(() => renderUnlessEditing()).catch(() => {});
+        if (nextSnapshot.pairAddress) void fetchDexScreenerPairInfo(nextSnapshot.pairAddress);
+      } else if (nextSnapshot.pairAddress && nextSnapshot.pairAddress !== lastDexFetchPairAddress) {
+        void fetchDexScreenerPairInfo(nextSnapshot.pairAddress);
       }
     }
 
@@ -1960,7 +2091,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
 
     window.addEventListener("pointerup", () => {
-      schedulePageRefresh(24);
+      if (!dragState) schedulePageRefresh(24);
     }, true);
     document.addEventListener("click", event => {
       const anchor = event.target?.closest?.("a[href]");
