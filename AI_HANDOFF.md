@@ -17,26 +17,17 @@ This file exists so that a new AI assistant — with no memory of prior sessions
 
 **Do add to this file** any time you make a non-obvious architectural decision, discover a fragile dependency, change the data model, or learn something about how the user wants to work. Update in the same task, not at the end of the session.
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 ---
 
 ## Skills and tools available
 
-A set of Claude Code skills are installed in `.claude/skills/`. Always check whether a skill is relevant before starting **any** task — UI, backend, architecture, refactoring, or testing. They contain specialized knowledge that improves output quality and should be used proactively, not just when the user asks.
+Skills are split across two locations — both are always available:
+- **`~/.claude/skills/`** — universal skills (all projects): `ui-ux-pro-max`, `react-best-practices`, `javascript-mastery`, `senior-security`, `senior-architect`, `senior-backend`, `code-reviewer`, `supabase-postgres-best-practices`, `webapp-testing`, and more
+- **`.claude/skills/`** — project-specific: `chrome-extension-developer`, `design-system`
 
-**When to use each skill:**
-
-| Skill | Invoke when |
-|---|---|
-| `ui-ux-pro-max` | Any visual/UI work — layout, spacing, interaction states, component design |
-| `ui-design-system` | Creating or auditing UI tokens, new component patterns, design consistency review |
-| `react-best-practices` | Performance optimization, refactoring React components, avoiding re-render issues |
-| `senior-architect` | Architectural decisions, system design, evaluating tech trade-offs |
-| `senior-backend` | API design, Supabase query optimization, auth flows |
-| `code-reviewer` | Pre-commit review, security scan, quality check |
-| `mcp-builder` | Building MCP servers for external API integrations |
-| `webapp-testing` | UI testing with Playwright, verifying feature behavior in browser |
+See `~/.claude/CLAUDE.md` for the full trigger table. Always check whether a skill is relevant before starting any task — apply proactively.
 
 **Always invoke `ui-ux-pro-max` for any UI work.** This is a hard requirement from the user.
 
@@ -153,6 +144,9 @@ Knowing these saves significant navigation time.
 | `detectPageSnapshot()` | Builds current token/MC snapshot from page; calls all detection layers |
 | `detectVisibleMarketCapFromPage()` | Primary MC source — scrapes Axiom's displayed MC text |
 | `findAxiomPairInfoFromNextData()` | Reads token ticker, full name, CA, pair address from `__NEXT_DATA__` |
+| `fetchDexScreenerPairInfo(pairAddress)` | Fetches DexScreener once per coin load — seeds supply, bgPrice, `state.dexData` |
+| `getDisplayData()` | Merges `state.dexData` over DOM-detected data; use as single source for ticker/MC/CA display |
+| `getEstimatedLiveMarketCapUsd()` | Scales DexScreener seed MC by live WebSocket price ratio for instant MC on every tick |
 | `upsertCurrentPosition(current, sizeToAdd, snapshot)` | Creates or spreads into an open position using harmonic mean entry |
 | `closeTrade(fraction, options)` | Handles all sell logic — updates local state first, then Supabase |
 | `enqueueClose(item)` | Queues a failed Supabase close to `td_close_queue` in chrome.storage |
@@ -166,8 +160,7 @@ Knowing these saves significant navigation time.
 ### `src/api.js`
 | Function | What it does |
 |---|---|
-| `loadOpenPaperTrades(userId)` | Loads all `__TD_OPEN__` rows and parses them |
-| `loadClosedPaperTrades(userId)` | Loads all non-open trade rows |
+| `loadClosedAndOpenPaperTrades(userId)` | Single Supabase fetch — returns `{ closed, open }`. Use this, not the separate functions. |
 | `saveSessions(userId, sessions)` | Upserts full sessions blob to Supabase |
 | `deletePaperTradesByIds(ids)` | Batch delete by row id |
 
