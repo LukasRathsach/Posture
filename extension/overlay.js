@@ -346,10 +346,10 @@
       for (const m of tickerMatches) {
         const ticker = m[1];
         if (!isValidTicker(ticker)) continue;
-        const window = text.slice(Math.max(0, m.index - 600), m.index + 600);
-        const addrMatch = window.match(/"tokenAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
+        const snippet = text.slice(Math.max(0, m.index - 600), m.index + 600);
+        const addrMatch = snippet.match(/"tokenAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
         if (!addrMatch) continue;
-        const pairMatch = window.match(/"pairAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
+        const pairMatch = snippet.match(/"pairAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
         return { tokenTicker: ticker, tokenAddress: addrMatch[1], pairAddress: pairMatch?.[1] || "" };
       }
     }

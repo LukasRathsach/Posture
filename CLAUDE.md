@@ -43,12 +43,11 @@ Skills live in `.claude/skills/`. Invoke them proactively when the trigger condi
 | `ui-design-system` | Adding a new component type or token — check it fits the system |
 | `product-strategist` | Roadmap decisions, feature prioritisation, or "should we build this?" questions |
 | `webapp-testing` | Verifying a UI feature end-to-end after implementation |
+| `javascript-mastery` | Any non-trivial change to `extension/overlay.js` or other vanilla JS files — closure hygiene, prototype patching, async patterns, event listener cleanup |
 
 ## Skills — gaps (consider installing if the need arises)
 
 These don't exist yet but would be worth adding if the work comes up:
-
-- **`development/javascript-best-practices`** — `overlay.js` is 2000 lines of vanilla JS with no TypeScript. A JS-specific skill would catch patterns that `react-best-practices` doesn't cover (prototype patching, closure leaks, event listener hygiene).
 - **`utilities/git-workflow`** — commit conventions, PR templates, branch strategy. Low priority while solo.
 - **`monitoring/sentry`** — Sentry is already wired in. A skill here would help configure alerting, release tracking, and source maps properly before launch.
 
