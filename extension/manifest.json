@@ -11,7 +11,10 @@
   "host_permissions": [
     "https://*.supabase.co/*",
     "https://api.dexscreener.com/*",
-    "https://trading-dashboard-v8ns.onrender.com/*"
+    "https://trading-dashboard-v8ns.onrender.com/*",
+    "https://*.ingest.de.sentry.io/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,16 +30,23 @@
       ],
       "js": [
         "config.js",
+        "trade-contract.js",
+        "sentry.bundle.min.js",
         "overlay.js"
       ],
       "run_at": "document_start"
     },
     {
       "matches": [
-        "https://trading-dashboard-v8ns.onrender.com/*"
+        "https://trading-dashboard-v8ns.onrender.com/*",
+        "http://localhost/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1/*",
+        "http://127.0.0.1:*/*"
       ],
       "js": [
         "config.js",
+        "trade-contract.js",
         "dashboard-bridge.js"
       ],
       "run_at": "document_start"

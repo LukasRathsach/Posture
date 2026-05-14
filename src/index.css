@@ -11,6 +11,23 @@ body {
 }
 button, input, textarea { font: inherit; }
 button { transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, filter 160ms ease; }
+.ui-interactive-button {
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, filter 160ms ease, opacity 160ms ease;
+}
+.ui-interactive-button:hover:not(:disabled) {
+  filter: brightness(1.03);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 10px 20px rgba(15, 23, 42, 0.08);
+}
+.ui-interactive-button:active:not(:disabled) {
+  filter: brightness(0.99);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), inset 0 0 0 999px rgba(255, 255, 255, 0.02);
+}
+.ui-interactive-button:disabled {
+  opacity: 0.52;
+  filter: saturate(0.72);
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+}
 button,
 .clickable-text,
 .streak-badge,
@@ -71,4 +88,56 @@ select option { background: #1d1d23; color: #eeeef2; }
 @keyframes sheetUp {
   from { transform: translateY(16px); opacity: 0; }
   to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes softFadeUp {
+  from { transform: translateY(10px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+@keyframes popIn {
+  from { transform: translateY(6px) scale(0.985); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes loaderPulse {
+  0%, 80%, 100% { opacity: 0.22; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-1px); }
+}
+@keyframes shimmerSweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.ui-page-enter,
+.ui-panel-enter,
+.ui-card-reveal,
+.ui-status-notice,
+.ui-empty-state {
+  animation: softFadeUp 180ms ease both;
+}
+.ui-panel-pop {
+  animation: popIn 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ui-inline-loader {
+  min-height: 16px;
+}
+.ui-inline-loader--neutral { color: rgba(148, 163, 184, 0.96); }
+.ui-inline-loader--accent { color: #f59e0b; }
+.ui-inline-loader--success { color: #22c55e; }
+.ui-inline-loader--error { color: #ef4444; }
+.ui-inline-loader-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ui-inline-loader-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: loaderPulse 0.9s ease-in-out infinite;
+}
+.ui-inline-loader-dots span:nth-child(2) { animation-delay: 0.12s; }
+.ui-inline-loader-dots span:nth-child(3) { animation-delay: 0.24s; }
+.ui-skeleton {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.12) 0%, rgba(226, 232, 240, 0.18) 50%, rgba(148, 163, 184, 0.12) 100%);
+  background-size: 220% 100%;
+  animation: shimmerSweep 1.3s linear infinite;
 }

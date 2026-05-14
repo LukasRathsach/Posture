@@ -126,6 +126,10 @@ create table if not exists public.user_live_positions (
 create unique index if not exists user_live_positions_user_token_idx
 on public.user_live_positions (user_id, token_name);
 
+-- Deprecated: open paper positions now persist in public.user_paper_trades using
+-- the __TD_OPEN__ note contract so the extension and dashboard read one source.
+-- Keep this table in place until any older environments are explicitly migrated.
+
 alter table public.user_live_positions enable row level security;
 
 drop policy if exists "Users can read their own live positions" on public.user_live_positions;
@@ -229,6 +233,24 @@ begin
 end;
 $$;
 grant execute on function public.list_invites to authenticated;
+
+-- Self-service account deletion used by the dashboard settings panel.
+create or replace function public.delete_user()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  delete from auth.users
+  where id = auth.uid();
+end;
+$$;
+grant execute on function public.delete_user to authenticated;
 
 -- Trigger: claim invite atomically when a new user is created.
 -- Runs as the user is inserted into auth.users, so it works whether

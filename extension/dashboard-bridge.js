@@ -14,7 +14,32 @@
       source: "posture-bridge",
       type: "inject_balance",
       value: value ?? null,
-    }, "*");
+    }, window.location.origin);
+  };
+
+  const broadcastOpenPositions = value => {
+    window.postMessage({
+      source: "posture-bridge",
+      type: "inject_open_positions",
+      value: value || {},
+    }, window.location.origin);
+  };
+
+  const applyImmediateStateSync = ({ balance, openPositions }) => {
+    try {
+      if (balance === undefined || balance === null) {
+        localStorage.removeItem("posture_virtual_balance");
+      } else {
+        localStorage.setItem("posture_virtual_balance", String(balance));
+      }
+    } catch (_) {}
+    try {
+      localStorage.setItem("posture_extension_open_positions", JSON.stringify(openPositions || {}));
+    } catch (_) {}
+    if (balance !== undefined) {
+      broadcastBalance(balance);
+    }
+    broadcastOpenPositions(openPositions || {});
   };
 
   const loadAndBroadcastBalance = () => {
@@ -58,20 +83,16 @@
         type: "inject_session",
         access_token: session.access_token,
         refresh_token: session.refresh_token,
-      }, "*");
+      }, window.location.origin);
     }
     if (balance !== undefined && balance !== null) {
       window.postMessage({
         source: "posture-bridge",
         type: "inject_balance",
         value: balance,
-      }, "*");
+      }, window.location.origin);
     }
-    window.postMessage({
-      source: "posture-bridge",
-      type: "inject_open_positions",
-      value: openPositions || {},
-    }, "*");
+    broadcastOpenPositions(openPositions || {});
   });
 
   // Dashboard → Extension: receive messages from the React app
@@ -102,6 +123,10 @@
         chrome.storage.local.set({ [BALANCE_KEY]: Number(value.toFixed(4)) }, () => loadAndBroadcastBalance());
       }
     }
+    if (e.data.type === "open_positions_update") {
+      const next = e.data.value && typeof e.data.value === "object" ? e.data.value : {};
+      chrome.storage.local.set({ [OPEN_POSITIONS_KEY]: next });
+    }
   });
 
   chrome.storage.onChanged.addListener(changes => {
@@ -121,11 +146,15 @@
       try {
         localStorage.setItem("posture_extension_open_positions", JSON.stringify(nextOpenPositions));
       } catch (_) {}
-      window.postMessage({
-        source: "posture-bridge",
-        type: "inject_open_positions",
-        value: nextOpenPositions,
-      }, "*");
+      broadcastOpenPositions(nextOpenPositions);
     }
+  });
+
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type !== "td_sync_dashboard_state") return;
+    applyImmediateStateSync({
+      balance: message.balance,
+      openPositions: message.openPositions,
+    });
   });
 })();

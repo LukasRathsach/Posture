@@ -4,7 +4,6 @@
   const EXTENSION_ENABLED_KEY = "td_extension_enabled";
   const FORCE_OVERLAY_KEY = "td_force_overlay";
   const OVERLAY_POSITION_KEY = "td_overlay_position";
-  const OVERLAY_COMPACT_KEY = "td_overlay_compact";
 
   const els = {
     setupState: document.getElementById("setup-state"),
@@ -121,7 +120,9 @@
   }
 
   function openDashboard() {
-    chrome.tabs.create({ url: config.dashboardUrl });
+    chrome.runtime.sendMessage({ type: "td_open_dashboard", url: config.dashboardUrl }, () => {
+      void chrome.runtime?.lastError;
+    });
   }
 
   async function renderSignedIn() {
@@ -176,7 +177,6 @@
     els.resetOverlay.addEventListener("click", async () => {
       await storage.set({
         [OVERLAY_POSITION_KEY]: { top: 120, left: 24 },
-        [OVERLAY_COMPACT_KEY]: false,
         [FORCE_OVERLAY_KEY]: true,
         [EXTENSION_ENABLED_KEY]: true,
       });

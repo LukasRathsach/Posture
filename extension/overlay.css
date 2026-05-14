@@ -57,6 +57,19 @@
   box-sizing: border-box;
 }
 
+.td-overlay-toast {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--td-border-subtle);
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.4;
+}
+.td-overlay-toast--good { color: #4ade80; background: rgba(74, 222, 128, 0.06); }
+.td-overlay-toast--bad  { color: #f87171; background: rgba(248, 113, 113, 0.07); }
+.td-overlay-toast--neutral { color: var(--td-text-dim); }
+
 .td-overlay-head {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -77,6 +90,7 @@
   align-items: center;
   gap: 6px;
   justify-content: flex-end;
+  position: relative;
 }
 
 
@@ -116,19 +130,29 @@
   font: inherit;
   border: none;
   background: transparent;
-  padding: 0;
-  margin: 0;
+  padding: 3px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
   color: var(--td-text);
+  transition: background 120ms ease;
+}
+
+.td-overlay-balance:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.is-light .td-overlay-balance:hover {
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .td-overlay-balance-tip {
   position: absolute;
-  top: calc(100% + 7px);
+  bottom: calc(100% + 7px);
   left: 50%;
-  transform: translateX(-50%) translateY(-2px);
+  transform: translateX(-50%) translateY(2px);
   background: var(--td-bg);
   border: 1px solid var(--td-border);
   border-radius: 6px;
@@ -221,6 +245,9 @@
 .td-overlay-icon-btn-settings svg {
   width: 14px;
   height: 14px;
+  fill: currentColor;
+  stroke: none;
+  stroke-width: 0;
 }
 
 .td-overlay-icon-btn-pos.is-active {
@@ -254,6 +281,11 @@
 .td-overlay-disabled-hint {
   position: relative;
   display: block;
+  width: 100%;
+}
+
+.td-overlay-disabled-hint .td-overlay-preset {
+  width: 100%;
 }
 
 .td-overlay-disabled-hint::after {
@@ -284,6 +316,7 @@
 }
 
 .td-overlay-preset {
+  width: 100%;
   border: 1px solid rgba(80, 255, 108, 0.25);
   background: rgba(80, 255, 108, 0.06);
   color: #50ff6c;
@@ -392,6 +425,12 @@
   opacity: 1;
 }
 
+.td-overlay-preset:disabled {
+  color: var(--td-text-faint);
+  background: var(--td-card-bg);
+  border-color: var(--td-border-subtle);
+}
+
 .td-overlay-pill:disabled {
   color: var(--td-text-faint);
   background: var(--td-card-bg);
@@ -443,6 +482,49 @@
   text-align: center;
 }
 
+.td-overlay-pos-token-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 2px;
+  flex-wrap: wrap;
+}
+
+.td-overlay-pos-token-fullname {
+  font-size: 11px;
+  color: var(--td-text-dim);
+}
+
+.td-overlay-pos-ca-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--td-text-faint);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: monospace;
+  transition: color 120ms ease;
+}
+
+.td-overlay-pos-ca-copy:hover {
+  color: var(--td-text-dim);
+}
+
+.td-overlay-pos-ca-copy svg,
+.td-overlay-pos-ca-copy svg path,
+.td-overlay-pos-ca-copy svg rect {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  flex-shrink: 0;
+}
+
 .td-overlay-pos-summary {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -489,23 +571,55 @@
 }
 
 .td-overlay-automation-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+}
+
+.td-overlay-automation-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.td-overlay-automation-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.td-overlay-automation-modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--td-border-subtle);
+  border-radius: 999px;
+  background: var(--td-card-bg);
+}
+
+.td-overlay-automation-mode {
+  font: inherit;
+  min-width: 28px;
+  min-height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--td-text-dim);
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.td-overlay-automation-mode.is-active {
+  background: var(--td-field-bg);
+  color: var(--td-text);
 }
 
 .td-overlay-automation-input {
   min-height: 30px;
   padding: 6px 8px;
   font-size: 12px;
-}
-
-.td-overlay-automation-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 2px;
 }
 
 .td-overlay-contract {
@@ -538,11 +652,18 @@
 
 
 .td-overlay-settings-panel {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--td-border-subtle);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  min-width: 180px;
+  background: var(--td-card-bg);
+  border: 1px solid var(--td-border-subtle);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
 .td-overlay-settings-signout {
@@ -551,14 +672,16 @@
   color: var(--td-text-mid);
   background: none;
   border: none;
-  padding: 0;
+  border-top: 1px solid var(--td-border-subtle);
+  padding: 8px 12px;
   cursor: pointer;
-  opacity: 0.78;
   text-align: left;
+  width: 100%;
 }
 
 .td-overlay-settings-signout:hover {
-  opacity: 1;
+  color: var(--td-text);
+  background: rgba(255,255,255,0.04);
 }
 
 .td-overlay-pos-nav-list {
@@ -604,6 +727,12 @@
 
 .td-overlay-pos-nav-row.is-current .td-overlay-pos-nav-name {
   color: #50ff6c;
+}
+
+.td-overlay-pos-nav-fullname {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--td-text-faint);
 }
 
 .td-overlay-pos-nav-size {

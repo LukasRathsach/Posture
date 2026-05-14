@@ -2,6 +2,10 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const tradeContract = globalThis.PostureTradeContract;
+if (!tradeContract) {
+  throw new Error("Missing PostureTradeContract.");
+}
 
 export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
 
@@ -65,6 +69,13 @@ export async function signOutUser() {
   if (error) throw error;
 }
 
+export async function deleteCurrentUser() {
+  const sb = getSupabase();
+  const { error } = await sb.rpc("delete_user");
+  if (error) throw error;
+  await sb.auth.signOut();
+}
+
 export async function sendPasswordResetEmail(email, redirectTo) {
   const { data, error } = await getSupabase().auth.resetPasswordForEmail(email, {
     redirectTo,
@@ -121,79 +132,28 @@ export async function loadPaperTrades(userId) {
     .order("trade_timestamp", { ascending: false });
 
   if (error) throw error;
-  return (data || []).map(trade => ({
-    closeMeta: parseCloseTradeNote(trade.notes || ""),
-    id: trade.id,
-    tokenName: trade.token_name || "?",
-    pnlSol: Number(trade.pnl_sol || 0),
-    pnlPercentage: Number(trade.pnl_percentage || 0),
-    entryMarketCap: Number(trade.entry_market_cap || 0),
-    exitMarketCap: Number(trade.exit_market_cap || 0),
-    notes: parseCloseTradeNote(trade.notes || "") ? "" : (trade.notes || ""),
-    timestamp: trade.trade_timestamp ? new Date(trade.trade_timestamp).getTime() : Date.now(),
-  }));
+  return (data || []).map(trade => {
+    const closeMeta = parseCloseTradeNote(trade.notes || "");
+    return {
+      closeMeta,
+      positionId: closeMeta?.positionId || null,
+      id: trade.id,
+      tokenName: closeMeta?.tokenName || trade.token_name || "?",
+      pnlSol: Number(trade.pnl_sol || 0),
+      pnlPercentage: Number(trade.pnl_percentage || 0),
+      entryMarketCap: Number(trade.entry_market_cap || 0),
+      exitMarketCap: Number(trade.exit_market_cap || 0),
+      notes: closeMeta ? "" : (trade.notes || ""),
+      timestamp: trade.trade_timestamp ? new Date(trade.trade_timestamp).getTime() : Date.now(),
+    };
+  });
 }
 
-const OPEN_TRADE_NOTE_PREFIX = "__TD_OPEN__";
-const CLOSE_TRADE_NOTE_PREFIX = "__TD_CLOSE__";
-
-function parseCloseTradeNote(note) {
-  if (!(note || "").startsWith(CLOSE_TRADE_NOTE_PREFIX)) return null;
-  try {
-    const parsed = JSON.parse(String(note).slice(CLOSE_TRADE_NOTE_PREFIX.length));
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
+const OPEN_TRADE_NOTE_PREFIX = tradeContract.OPEN_TRADE_NOTE_PREFIX;
+const parseCloseTradeNote = tradeContract.parseCloseTradeNote;
 
 function parseOpenTradeNote(note, trade) {
-  if (!(note || "").startsWith(OPEN_TRADE_NOTE_PREFIX)) return null;
-  const raw = String(note).slice(OPEN_TRADE_NOTE_PREFIX.length);
-  const fallbackTimestamp = trade.trade_timestamp ? new Date(trade.trade_timestamp).getTime() : Date.now();
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-    return {
-      positionId: parsed.positionId || `${trade.token_name || trade.tokenName || "unknown"}_${fallbackTimestamp}`,
-      tokenName: parsed.tokenName || trade.token_name || trade.tokenName || "?",
-      positionSizeSol: Number(parsed.positionSizeSol || 0),
-      initialSizeSol: Number(parsed.initialSizeSol || parsed.positionSizeSol || 0),
-      entryMarketCap: Number(parsed.entryMarketCap || trade.entry_market_cap || trade.entryMarketCap || 0),
-      realizedPnlSol: Number(parsed.realizedPnlSol || 0),
-      openedAt: Number(parsed.openedAt || fallbackTimestamp),
-      pageUrl: parsed.pageUrl || "",
-      marketCapSource: parsed.marketCapSource || "unknown",
-      contractAddress: parsed.contractAddress || "",
-      pairAddress: parsed.pairAddress || "",
-      stopLossPct: parsed.stopLossPct ?? null,
-      targetSellPct: parsed.targetSellPct ?? null,
-      entryCapture: parsed.entryCapture || null,
-      lastCapture: parsed.lastCapture || null,
-      events: Array.isArray(parsed.events) ? parsed.events : [],
-    };
-  } catch {
-    const legacySize = Number(raw || 0);
-    return {
-      positionId: `${trade.token_name || trade.tokenName || "unknown"}_${fallbackTimestamp}`,
-      tokenName: trade.token_name || trade.tokenName || "?",
-      positionSizeSol: legacySize,
-      initialSizeSol: legacySize,
-      entryMarketCap: Number(trade.entry_market_cap || trade.entryMarketCap || 0),
-      realizedPnlSol: 0,
-      openedAt: fallbackTimestamp,
-      pageUrl: "",
-      marketCapSource: "legacy",
-      contractAddress: "",
-      pairAddress: "",
-      stopLossPct: null,
-      targetSellPct: null,
-      entryCapture: null,
-      lastCapture: null,
-      events: [],
-    };
-  }
+  return tradeContract.parseOpenTradeNote(note, trade);
 }
 
 export async function deletePaperTradesByIds(ids) {
@@ -257,7 +217,11 @@ export async function loadOpenPaperTrades(userId) {
       contractAddress: parsed.contractAddress,
       pairAddress: parsed.pairAddress,
       stopLossPct: parsed.stopLossPct,
+      stopLossMode: parsed.stopLossMode,
+      stopLossMarketCap: parsed.stopLossMarketCap,
       targetSellPct: parsed.targetSellPct,
+      targetSellMode: parsed.targetSellMode,
+      targetSellMarketCap: parsed.targetSellMarketCap,
       entryCapture: parsed.entryCapture,
       lastCapture: parsed.lastCapture,
       events: parsed.events,

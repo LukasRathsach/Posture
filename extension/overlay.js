@@ -4,20 +4,50 @@
 
   const config = window.POSTURE_EXTENSION_CONFIG;
   const storage = chrome.storage.local;
+  const tradeContract = globalThis.PostureTradeContract;
+  if (!tradeContract) {
+    throw new Error("Missing PostureTradeContract.");
+  }
+
+  const Sentry = window.Sentry || null;
+  if (Sentry && config?.sentryDsn) {
+    Sentry.init({
+      dsn: config.sentryDsn,
+      environment: "production",
+      tracesSampleRate: 0,
+    });
+  }
+
+  function sentryUser(user) {
+    if (!Sentry || !user) return;
+    Sentry.setUser({ id: user.id });
+  }
+
+  function sentryCrumb(category, message, data) {
+    if (!Sentry) return;
+    Sentry.addBreadcrumb({ category, message, data, level: "info" });
+  }
+
+  function sentryError(error, context) {
+    if (!Sentry) return;
+    Sentry.captureException(error, { extra: context });
+  }
   const OPEN_POSITIONS_KEY = "td_open_positions";
   const EXTENSION_ENABLED_KEY = "td_extension_enabled";
   const FORCE_OVERLAY_KEY = "td_force_overlay";
   const OVERLAY_POSITION_KEY = "td_overlay_position";
-  const OVERLAY_COMPACT_KEY = "td_overlay_compact";
   const VIRTUAL_BALANCE_KEY = "td_virtual_balance";
   const BG_PRICE_KEY = "td_bg_price";
   const OVERLAY_DARK_THEME_KEY = "td_overlay_dark_theme";
-  const OPEN_TRADE_NOTE_PREFIX = "__TD_OPEN__";
-  const CLOSE_TRADE_NOTE_PREFIX = "__TD_CLOSE__";
+  const OPEN_TRADE_NOTE_PREFIX = tradeContract.OPEN_TRADE_NOTE_PREFIX;
+  const CLOSE_TRADE_NOTE_PREFIX = tradeContract.CLOSE_TRADE_NOTE_PREFIX;
   const MAX_POSITION_EVENTS = 12;
   const FEE_PER_TRADE = 0.01;
   const BUY_PRESETS = [0.1, 0.2, 0.4, 1];
   const SELL_PRESETS = [10, 25, 50, 100];
+  const DEBUG_LOGGING_KEY = "td_debug_logging";
+  const ADVANCED_TRADING_KEY = "td_advanced_trading";
+  const CLOSE_QUEUE_KEY = "td_close_queue";
 
   const state = {
     session: null,
@@ -31,7 +61,6 @@
     tradeBusy: false,
     status: "",
     statusTone: "neutral",
-    compact: false,
     position: { top: 242, left: 224 },
     forceOverlay: false,
     pairInfo: null,
@@ -43,12 +72,18 @@
     posNavOpen: false,
     bgPrice: null,
     darkTheme: true,
+    automationDrafts: {},
+    debugLogging: false,
+    advancedTrading: false,
   };
 
   let pageRefreshTimer = null;
   let lastPageKey = "";
   let dragState = null;
   let liveDataRenderTimer = null;
+  let statusDismissTimer = null;
+  let historyPatched = false;
+  let routeBurstTimers = [];
   const root = document.createElement("div");
   root.className = "td-overlay-root";
   document.documentElement.appendChild(root);
@@ -119,15 +154,35 @@
     if (changed && shouldShowOverlay()) {
       clearTimeout(liveDataRenderTimer);
       liveDataRenderTimer = window.setTimeout(() => {
-        render();
+        renderUnlessEditing();
         void maybeRunAutoExit("socket-update");
       }, 80);
     }
   }
 
   function setStatus(message, tone) {
+    clearTimeout(statusDismissTimer);
     state.status = message || "";
     state.statusTone = tone || "neutral";
+    if (tone === "good" && message) {
+      statusDismissTimer = window.setTimeout(() => {
+        state.status = "";
+        renderUnlessEditing();
+      }, 3000);
+    }
+  }
+
+  function debugLog(...args) {
+    if (!state.debugLogging) return;
+    console.log("[Posture]", ...args);
+  }
+
+  async function saveDebugLogging() {
+    await storage.set({ [DEBUG_LOGGING_KEY]: state.debugLogging });
+  }
+
+  async function saveAdvancedTrading() {
+    await storage.set({ [ADVANCED_TRADING_KEY]: state.advancedTrading });
   }
 
   function getDashboardBalanceUrl() {
@@ -144,6 +199,17 @@
     const url = getDashboardBalanceUrl();
     if (chrome?.runtime?.sendMessage) {
       chrome.runtime.sendMessage({ type: "td_open_dashboard_balance", url }, () => {
+        void chrome.runtime?.lastError;
+      });
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openDashboard() {
+    const url = config.dashboardUrl;
+    if (chrome?.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({ type: "td_open_dashboard", url }, () => {
         void chrome.runtime?.lastError;
       });
       return;
@@ -233,16 +299,49 @@
       .filter(Boolean);
   }
 
+  function findAxiomPairInfoFromNextData() {
+    try {
+      const el = document.getElementById("__NEXT_DATA__");
+      if (!el) return null;
+      const text = el.textContent || "";
+      // Search for tokenTicker + tokenAddress anywhere in the Next.js page props
+      const tickerMatch = text.match(/"tokenTicker"\s*:\s*"([A-Z0-9]{2,16})"/);
+      if (!tickerMatch || TOKEN_NAME_BLOCKLIST.has(tickerMatch[1])) return null;
+      const addrMatch = text.match(/"tokenAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
+      const pairMatch = text.match(/"pairAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
+      const fullNameMatch = text.match(/"tokenName"\s*:\s*"([^"]{2,50})"/);
+      if (addrMatch) {
+        return { tokenTicker: tickerMatch[1], tokenAddress: addrMatch[1], pairAddress: pairMatch?.[1] || "", tokenFullName: fullNameMatch?.[1] || null };
+      }
+    } catch (_error) {}
+    return null;
+  }
+
   function findAxiomPairInfoFromScripts() {
+    // Try __NEXT_DATA__ first — most stable across Axiom deploys
+    const fromNextData = findAxiomPairInfoFromNextData();
+    if (fromNextData) return fromNextData;
+
     const scripts = findJsonScripts();
     for (const text of scripts) {
-      const match = text.match(/\{"tokenImage":.*?"pairAddress":.*?"tokenAddress":.*?"tokenTicker":.*?\}/s);
-      if (!match) continue;
-      try {
-        const parsed = JSON.parse(match[0]);
-        if (parsed?.tokenAddress && parsed?.tokenTicker) return parsed;
-      } catch (_error) {
-        continue;
+      // Original strict pattern (field-order dependent — kept as first attempt)
+      const strictMatch = text.match(/\{"tokenImage":.*?"pairAddress":.*?"tokenAddress":.*?"tokenTicker":.*?\}/s);
+      if (strictMatch) {
+        try {
+          const parsed = JSON.parse(strictMatch[0]);
+          if (parsed?.tokenAddress && parsed?.tokenTicker) return parsed;
+        } catch (_error) {}
+      }
+      // Flexible: find tokenTicker anywhere, then look for tokenAddress nearby
+      const tickerMatches = [...text.matchAll(/"tokenTicker"\s*:\s*"([A-Z0-9]{2,16})"/g)];
+      for (const m of tickerMatches) {
+        const ticker = m[1];
+        if (!isValidTicker(ticker)) continue;
+        const window = text.slice(Math.max(0, m.index - 600), m.index + 600);
+        const addrMatch = window.match(/"tokenAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
+        if (!addrMatch) continue;
+        const pairMatch = window.match(/"pairAddress"\s*:\s*"([1-9A-HJ-NP-Za-km-z]{32,44})"/);
+        return { tokenTicker: ticker, tokenAddress: addrMatch[1], pairAddress: pairMatch?.[1] || "" };
       }
     }
     return null;
@@ -266,13 +365,24 @@
     return null;
   }
 
+  function esc(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function buildPositionId(tokenName, openedAt) {
-    const safeToken = String(tokenName || "unknown").replace(/[^a-z0-9_-]/gi, "_");
-    return `${safeToken}_${openedAt}`;
+    return tradeContract.buildPositionId(tokenName, openedAt);
   }
 
   function getPositionKey(snapshotOrPosition) {
-    return snapshotOrPosition?.contractAddress || snapshotOrPosition?.tokenName || "unknown";
+    return snapshotOrPosition?.contractAddress
+      || snapshotOrPosition?.pairAddress
+      || snapshotOrPosition?.tokenName
+      || "unknown";
   }
 
   function createCaptureMeta(snapshot) {
@@ -338,85 +448,88 @@
     return Math.abs(Number(parsed.toFixed(2)));
   }
 
+  function normalizeMarketCapValue(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const cleaned = String(value).trim().replace(/\$/g, "");
+    if (!cleaned) return null;
+    const parsed = parseAbbrevNumber(cleaned) ?? Number(cleaned.replace(/,/g, ""));
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return Number(parsed.toFixed(2));
+  }
+
+  function getAutomationDraft(position) {
+    if (!position?.positionId) return { stopLoss: "", targetSell: "" };
+    const existingDraft = state.automationDrafts[position.positionId];
+    if (existingDraft) return existingDraft;
+    const stopLossMode = position.stopLossMode || (position.stopLossMarketCap ? "mc" : "pct");
+    const targetSellMode = position.targetSellMode || (position.targetSellMarketCap ? "mc" : "pct");
+    return {
+      stopLossMode,
+      targetSellMode,
+      stopLoss: stopLossMode === "mc"
+        ? (position.stopLossMarketCap ? String(position.stopLossMarketCap) : "")
+        : (position.stopLossPct ? String(Math.abs(position.stopLossPct)) : ""),
+      targetSell: targetSellMode === "mc"
+        ? (position.targetSellMarketCap ? String(position.targetSellMarketCap) : "")
+        : (position.targetSellPct ? String(position.targetSellPct) : ""),
+    };
+  }
+
+  function setAutomationDraft(position, nextDraft) {
+    if (!position?.positionId) return;
+    state.automationDrafts[position.positionId] = {
+      ...getAutomationDraft(position),
+      ...nextDraft,
+    };
+  }
+
+  function clearAutomationDraft(position) {
+    if (!position?.positionId) return;
+    delete state.automationDrafts[position.positionId];
+  }
+
+  function isAutomationEditing() {
+    const activeElement = document.activeElement;
+    return Boolean(
+      activeElement &&
+      root.contains(activeElement) &&
+      activeElement.matches?.("[data-stop-loss-input], [data-target-sell-input]")
+    );
+  }
+
+  function renderUnlessEditing() {
+    if (isAutomationEditing()) return;
+    render();
+  }
+
+  function formatThresholdLabel(position, kind) {
+    if (!position) return "—";
+    if (kind === "stop") {
+      if ((position.stopLossMode || "pct") === "mc") {
+        return position.stopLossMarketCap ? `${formatCompactUsd(position.stopLossMarketCap)} MC` : "—";
+      }
+      return position.stopLossPct ? `${Math.abs(position.stopLossPct).toFixed(1)}%` : "—";
+    }
+    if ((position.targetSellMode || "pct") === "mc") {
+      return position.targetSellMarketCap ? `${formatCompactUsd(position.targetSellMarketCap)} MC` : "—";
+    }
+    return position.targetSellPct ? `${position.targetSellPct.toFixed(1)}%` : "—";
+  }
+
   function encodeOpenTradeNote(position) {
-    return `${OPEN_TRADE_NOTE_PREFIX}${JSON.stringify({
-      positionId: position.positionId,
-      tokenName: position.tokenName,
-      entryMarketCap: Number(position.entryMarketCap || 0),
-      positionSizeSol: Number(position.positionSizeSol || 0),
-      initialSizeSol: Number(position.initialSizeSol || 0),
-      realizedPnlSol: Number(position.realizedPnlSol || 0),
-      openedAt: Number(position.openedAt || Date.now()),
-      pageUrl: position.pageUrl || "",
-      marketCapSource: position.marketCapSource || "unknown",
-      contractAddress: position.contractAddress || "",
-      pairAddress: position.pairAddress || "",
-      stopLossPct: position.stopLossPct ?? null,
-      targetSellPct: position.targetSellPct ?? null,
-      entryCapture: position.entryCapture || null,
-      lastCapture: position.lastCapture || null,
-      events: Array.isArray(position.events) ? position.events.slice(-MAX_POSITION_EVENTS) : [],
-    })}`;
+    return tradeContract.encodeOpenTradeNote(position, {
+      maxPositionEvents: MAX_POSITION_EVENTS,
+    });
   }
 
   function encodeCloseTradeNote(closeMeta) {
-    return `${CLOSE_TRADE_NOTE_PREFIX}${JSON.stringify(closeMeta)}`;
+    return tradeContract.encodeCloseTradeNote(closeMeta);
   }
 
   function parseOpenTradeNote(note, fallbackTrade) {
-    if (!String(note || "").startsWith(OPEN_TRADE_NOTE_PREFIX)) return null;
-    const raw = String(note || "").slice(OPEN_TRADE_NOTE_PREFIX.length);
-    const fallbackTimestamp = fallbackTrade?.trade_timestamp
-      ? new Date(fallbackTrade.trade_timestamp).getTime()
-      : Date.now();
-
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return null;
-      const openedAt = Number(parsed.openedAt || fallbackTimestamp);
-      const tokenName = parsed.tokenName || fallbackTrade?.token_name || fallbackTrade?.tokenName || "Unknown";
-      const positionSizeSol = Number(parsed.positionSizeSol || 0);
-      const initialSizeSol = Number(parsed.initialSizeSol || positionSizeSol || 0);
-      return {
-        positionId: parsed.positionId || buildPositionId(tokenName, openedAt),
-        tokenName,
-        entryMarketCap: Number(parsed.entryMarketCap || fallbackTrade?.entry_market_cap || fallbackTrade?.entryMarketCap || 0),
-        positionSizeSol,
-        initialSizeSol,
-        realizedPnlSol: Number(parsed.realizedPnlSol || 0),
-        openedAt,
-        pageUrl: parsed.pageUrl || "",
-        marketCapSource: parsed.marketCapSource || "unknown",
-        contractAddress: parsed.contractAddress || "",
-        pairAddress: parsed.pairAddress || "",
-        stopLossPct: parsed.stopLossPct ?? null,
-        targetSellPct: parsed.targetSellPct ?? null,
-        entryCapture: parsed.entryCapture || null,
-        lastCapture: parsed.lastCapture || null,
-        events: Array.isArray(parsed.events) ? parsed.events.slice(-MAX_POSITION_EVENTS) : [],
-      };
-    } catch (_error) {
-      const legacySize = Number(raw || 0);
-      const openedAt = fallbackTimestamp;
-      const tokenName = fallbackTrade?.token_name || fallbackTrade?.tokenName || "Unknown";
-      return {
-        positionId: buildPositionId(tokenName, openedAt),
-        tokenName,
-        entryMarketCap: Number(fallbackTrade?.entry_market_cap || fallbackTrade?.entryMarketCap || 0),
-        positionSizeSol: legacySize,
-        initialSizeSol: legacySize,
-        openedAt,
-        pageUrl: "",
-        marketCapSource: "legacy",
-        contractAddress: "",
-        pairAddress: "",
-        stopLossPct: null,
-        targetSellPct: null,
-        entryCapture: null,
-        lastCapture: null,
-        events: [],
-      };
-    }
+    return tradeContract.parseOpenTradeNote(note, fallbackTrade, {
+      maxPositionEvents: MAX_POSITION_EVENTS,
+    });
   }
 
   function upsertCurrentPosition(current, sizeToAdd, snapshot) {
@@ -434,6 +547,7 @@
       return {
         positionId: buildPositionId(snapshot.tokenName, openedAt),
         tokenName: snapshot.tokenName,
+        tokenFullName: snapshot.tokenFullName || null,
         entryMarketCap: Number(snapshot.marketCap),
         positionSizeSol: addSize,
         initialSizeSol: addSize,
@@ -443,7 +557,11 @@
         contractAddress: snapshot.contractAddress || "",
         pairAddress: snapshot.pairAddress || "",
         stopLossPct: null,
+        stopLossMode: "pct",
+        stopLossMarketCap: null,
         targetSellPct: null,
+        targetSellMode: "pct",
+        targetSellMarketCap: null,
         entryCapture: createCaptureMeta(snapshot),
         lastCapture: createCaptureMeta(snapshot),
         events: [entryEvent],
@@ -462,6 +580,7 @@
     return {
       ...current,
       tokenName: snapshot.tokenName,
+      tokenFullName: snapshot.tokenFullName || current.tokenFullName || null,
       entryMarketCap: Number(weightedEntryMarketCap.toFixed(2)),
       positionSizeSol: nextPositionSizeSol,
       initialSizeSol: nextInitialSizeSol,
@@ -477,25 +596,44 @@
     };
   }
 
+  // Common Axiom UI labels that match the ticker regex but are not token names
+  const TOKEN_NAME_BLOCKLIST = new Set(["CA", "MC", "FDV", "TVL", "APY", "LP", "URL", "USD", "DEX", "AMM", "DAO", "NFT", "ATH"]);
+
+  function isValidTicker(str) {
+    return /^[A-Z0-9]{2,16}$/.test(str) && !TOKEN_NAME_BLOCKLIST.has(str);
+  }
+
   function detectTokenFromPage() {
+    // 1. Best source: structured data from Axiom's script tags / Next.js page props
     const scriptPairInfo = findAxiomPairInfoFromScripts();
     if (scriptPairInfo?.tokenTicker) return scriptPairInfo.tokenTicker;
 
+    // 2. Axiom-specific DOM selector (may drift with Axiom deploys)
     const axiomToken = getTextContent("span.hidden.lg\\:inline.xl\\:hidden > div.min-w-0.overflow-hidden.truncate.whitespace-nowrap");
-    if (axiomToken && /^[A-Z0-9]{2,16}$/.test(axiomToken)) return axiomToken;
+    if (axiomToken && isValidTicker(axiomToken)) return axiomToken;
 
+    // 3. Page title — Axiom sets this to "TICKER/SOL | Axiom" or similar
+    const titleToken = (document.title || "").match(/^([A-Z0-9]{2,16})[^A-Z0-9]/)?.[1];
+    if (titleToken && isValidTicker(titleToken)) return titleToken;
+
+    // 4. URL path bits (works when Axiom uses the ticker in the URL)
+    const urlBits = location.pathname.split("/").map(bit => decodeURIComponent(bit)).reverse();
+    const fromUrl = urlBits.find(bit => isValidTicker(bit));
+    if (fromUrl) return fromUrl;
+
+    // 5. Heading elements — last resort, prone to picking up UI labels
     const headings = Array.from(document.querySelectorAll("h1, h2, h3, [class*='title'], [class*='symbol']"))
       .map(el => (el.textContent || "").trim())
       .filter(Boolean);
-    const exact = headings.find(text => /^[A-Z0-9]{2,12}$/.test(text));
+    const exact = headings.find(text => isValidTicker(text));
     if (exact) return exact;
 
-    const urlBits = location.pathname.split("/").map(bit => decodeURIComponent(bit)).reverse();
-    const fromUrl = urlBits.find(bit => /^[A-Z0-9]{2,12}$/.test(bit));
-    if (fromUrl) return fromUrl;
+    return "Unknown";
+  }
 
-    const fallback = (document.body.innerText || "").match(/\b[A-Z0-9]{2,12}\b/g);
-    return fallback?.find(token => token.length >= 2 && token.length <= 12) || "Unknown";
+  function getContractFallbackName(contractAddress) {
+    if (!contractAddress || contractAddress.length < 10) return "Unknown";
+    return `${contractAddress.slice(0, 4)}...${contractAddress.slice(-4)}`;
   }
 
   function detectContractAddressFromPage() {
@@ -575,19 +713,42 @@
     return { value: null, source: "missing", text: "" };
   }
 
+  function isLikelyAxiomCoinPage(snapshot) {
+    const path = String(location.pathname || "");
+    if (/\/meme\/[^/]+/i.test(path)) return true;
+    if (/\/token\/[^/]+/i.test(path)) return true;
+    if (/\/pair\/[^/]+/i.test(path)) return true;
+
+    const tokenName = snapshot?.tokenName || "";
+    const contractAddress = snapshot?.contractAddress || "";
+    const pairAddress = snapshot?.pairAddress || "";
+    return Boolean(isValidTicker(tokenName) && (contractAddress || pairAddress));
+  }
+
+  function isImmediateCoinRoute(pathname = location.pathname) {
+    return /\/(meme|token|pair)\/[^/]+/i.test(String(pathname || ""));
+  }
+
   function detectPageSnapshot() {
     const marketCapCapture = detectMarketCapFromPage();
     const contractCapture = detectContractAddressFromPage();
-    return {
-      tokenName: detectTokenFromPage(),
+    const pairInfoForName = findAxiomPairInfoFromScripts();
+    const detectedTokenName = detectTokenFromPage();
+    const fallbackTokenName = getContractFallbackName(contractCapture.contractAddress || contractCapture.pairAddress || "");
+    const snapshot = {
+      tokenName: detectedTokenName !== "Unknown" ? detectedTokenName : fallbackTokenName,
+      tokenFullName: pairInfoForName?.tokenFullName || null,
       marketCap: marketCapCapture?.value || null,
       marketCapSource: marketCapCapture?.source || "missing",
       marketCapText: marketCapCapture?.text || "",
       contractAddress: contractCapture.contractAddress || "",
       pairAddress: contractCapture.pairAddress || "",
       pageUrl: location.href,
-      isCoinPage: /^\/meme\/[^/]+/.test(location.pathname),
       capturedAt: Date.now(),
+    };
+    return {
+      ...snapshot,
+      isCoinPage: isLikelyAxiomCoinPage(snapshot),
     };
   }
 
@@ -701,10 +862,16 @@
       const positionKey = getPositionKey(parsed);
       if (!positionKey) return;
       backendKeys.add(positionKey);
+      const local = nextPositions[positionKey] || {};
       nextPositions[positionKey] = {
-        ...(nextPositions[positionKey] || {}),
+        ...local,
         ...parsed,
         backendTradeId: row.id,
+        // Keep local positionSizeSol if it's lower — it reflects unsynced partial sells
+        positionSizeSol: local.positionSizeSol != null && local.positionSizeSol < (parsed.positionSizeSol ?? Infinity)
+          ? local.positionSizeSol
+          : (parsed.positionSizeSol ?? local.positionSizeSol),
+        storageKey: local.storageKey || positionKey,
       };
     });
 
@@ -724,6 +891,7 @@
 
     state.openPositions = nextPositions;
     await saveOpenPositions();
+    debugLog("POSITIONS loaded", Object.keys(nextPositions).length, "keys:", Object.keys(nextPositions));
   }
 
   async function insertTrade(payload) {
@@ -758,12 +926,50 @@
     await storage.set({ [OPEN_POSITIONS_KEY]: state.openPositions });
   }
 
+  const MAX_QUEUE_RETRIES = 10;
+
+  async function enqueueClose(item) {
+    const { [CLOSE_QUEUE_KEY]: existing = [] } = await storage.get(CLOSE_QUEUE_KEY);
+    await storage.set({ [CLOSE_QUEUE_KEY]: [...existing, { ...item, queuedAt: Date.now(), retries: 0 }] });
+    debugLog("QUEUE enqueued close", item.closeTradePayload?.token_name);
+  }
+
+  async function flushCloseQueue() {
+    if (!state.user) return;
+    const { [CLOSE_QUEUE_KEY]: queue = [] } = await storage.get(CLOSE_QUEUE_KEY);
+    if (!queue.length) return;
+    debugLog("QUEUE flushing", queue.length, "item(s)");
+    const remaining = [];
+    const dead = [];
+    for (const item of queue) {
+      try {
+        await insertTrade({ ...item.closeTradePayload, user_id: state.user.id });
+        if (item.openTradeIdToDelete) await deleteTrade(item.openTradeIdToDelete).catch(() => {});
+        if (item.updatedOpenPosition) await persistOpenPosition(item.updatedOpenPosition).catch(() => {});
+      } catch {
+        const retries = (item.retries || 0) + 1;
+        if (retries >= MAX_QUEUE_RETRIES) {
+          dead.push({ ...item, retries, deadAt: Date.now() });
+          debugLog("QUEUE dead-letter", item.closeTradePayload?.token_name, "after", retries, "retries");
+        } else {
+          remaining.push({ ...item, retries });
+        }
+      }
+    }
+    if (dead.length) {
+      const { [CLOSE_QUEUE_KEY + "_dead"]: existingDead = [] } = await storage.get(CLOSE_QUEUE_KEY + "_dead");
+      await storage.set({ [CLOSE_QUEUE_KEY + "_dead"]: [...existingDead, ...dead] });
+    }
+    await storage.set({ [CLOSE_QUEUE_KEY]: remaining });
+    if (remaining.length < queue.length) await loadTrades();
+  }
+
   async function persistOpenPosition(position) {
     const payload = {
       token_name: position.tokenName,
       pnl_sol: 0,
       pnl_percentage: 0,
-      entry_market_cap: Number(position.entryMarketCap.toFixed(2)),
+      entry_market_cap: Number((position.entryMarketCap || 0).toFixed(2)),
       exit_market_cap: Number((position.lastCapture?.marketCap || position.entryMarketCap || 0).toFixed(2)),
       notes: encodeOpenTradeNote(position),
       trade_timestamp: new Date(position.openedAt || Date.now()).toISOString(),
@@ -771,6 +977,7 @@
 
     if (position.backendTradeId) {
       await updateTrade(position.backendTradeId, payload);
+      debugLog("PERSIST update", position.tokenName, "id:", position.backendTradeId);
       return position.backendTradeId;
     }
 
@@ -778,7 +985,9 @@
       user_id: state.user.id,
       ...payload,
     });
-    return openTrade?.id || null;
+    const newId = openTrade?.id || null;
+    debugLog("PERSIST insert", position.tokenName, "→ id:", newId);
+    return newId;
   }
 
   async function saveVirtualBalance() {
@@ -789,18 +998,29 @@
     await storage.set({ [OVERLAY_DARK_THEME_KEY]: state.darkTheme });
   }
 
+  function syncDashboardStateImmediately() {
+    try {
+      chrome.runtime.sendMessage({
+        type: "td_sync_dashboard_state",
+        balance: state.virtualBalance,
+        openPositions: state.openPositions,
+      }, () => {
+        void chrome.runtime?.lastError;
+      });
+    } catch (_error) {}
+  }
+
   async function saveOverlayUiState() {
     await storage.set({
       [OVERLAY_POSITION_KEY]: state.position,
-      [OVERLAY_COMPACT_KEY]: state.compact,
     });
   }
 
   function getCurrentPosition() {
-    const contractKey = state.detected?.contractAddress;
-    if (contractKey && state.openPositions[contractKey]) {
-      return state.openPositions[contractKey] || null;
-    }
+    const ca = state.detected?.contractAddress;
+    if (ca && state.openPositions[ca]) return state.openPositions[ca];
+    const pair = state.detected?.pairAddress;
+    if (pair && state.openPositions[pair]) return state.openPositions[pair];
     const token = state.detected?.tokenName;
     return token ? state.openPositions[token] || null : null;
   }
@@ -810,15 +1030,64 @@
     return Number(current?.positionSizeSol || 0);
   }
 
+  async function saveAutomationLevels(position, values, snapshotReason = "settings-update") {
+    if (!position || !state.user) return;
+    const stopLossMode = values.stopLossMode === "mc" ? "mc" : "pct";
+    const targetSellMode = values.targetSellMode === "mc" ? "mc" : "pct";
+    const stopLossPct = stopLossMode === "pct" ? normalizeStopLossPct(values.stopLoss) : null;
+    const stopLossMarketCap = stopLossMode === "mc" ? normalizeMarketCapValue(values.stopLoss) : null;
+    const targetSellPct = targetSellMode === "pct" ? normalizeTargetSellPct(values.targetSell) : null;
+    const targetSellMarketCap = targetSellMode === "mc" ? normalizeMarketCapValue(values.targetSell) : null;
+    const snapshot = state.detected || detectPageSnapshot();
+    const bothCleared = stopLossPct === null
+      && stopLossMarketCap === null
+      && targetSellPct === null
+      && targetSellMarketCap === null;
+    const nextPosition = {
+      ...position,
+      stopLossPct,
+      stopLossMode,
+      stopLossMarketCap,
+      targetSellPct,
+      targetSellMode,
+      targetSellMarketCap,
+      lastCapture: createCaptureMeta(snapshot),
+      events: appendPositionEvent(position, createPositionEvent(
+        bothCleared ? "automation_cleared" : "automation_updated",
+        snapshot,
+        {
+          stopLossPct,
+          stopLossMode,
+          stopLossMarketCap,
+          targetSellPct,
+          targetSellMode,
+          targetSellMarketCap,
+        }
+      )),
+    };
+    nextPosition.backendTradeId = await persistOpenPosition(nextPosition);
+    const nextPosKey = getPositionKey(nextPosition);
+    nextPosition.storageKey = nextPosKey;
+    state.openPositions[nextPosKey] = nextPosition;
+    clearAutomationDraft(position);
+    await saveOpenPositions();
+    setStatus(bothCleared ? "Auto-sell levels cleared." : "Stop loss / target saved.", "good");
+    render();
+    await maybeRunAutoExit(snapshotReason);
+  }
+
   function getEstimatedLiveMarketCapUsd() {
     const supply = Number(state.tokenMetadata?.supply || state.pairInfo?.supply || 0);
     const priceNative = Number(state.livePairPriceNative || state.tokenMetadata?.priceNative || 0);
-    const solPriceUsd = Number(state.solPriceUsd || state.bgPrice?.solPriceUsd || 0);
+    // bgPrice is now a map: { [pairAddress]: { marketCapUsd, priceNative, solPriceUsd, ts } }
+    const activePairAddress = state.detected?.pairAddress;
+    const bgEntry = activePairAddress && state.bgPrice ? state.bgPrice[activePairAddress] : null;
+    const solPriceUsd = Number(state.solPriceUsd || bgEntry?.solPriceUsd || 0);
     if (supply > 0 && priceNative > 0 && solPriceUsd > 0) {
       return supply * priceNative * solPriceUsd;
     }
-    // Fall back to background worker's last known market cap
-    const bgMC = Number(state.bgPrice?.marketCapUsd || 0);
+    // Fall back to background worker's last known market cap for this pair
+    const bgMC = Number(bgEntry?.marketCapUsd || 0);
     return bgMC > 0 ? bgMC : null;
   }
 
@@ -834,23 +1103,47 @@
     const current = getCurrentPosition();
     if (!current || !state.user) return;
     const livePnlPct = getCurrentLivePnlPct(current);
-    if (livePnlPct === null) return;
+    const liveMarketCap = getEstimatedLiveMarketCapUsd() || state.detected?.marketCap || null;
+    // When triggered by background price poll, build a synthetic snapshot so we
+    // don't accidentally close with state.detected from a different token's page.
+    const bgEntry = current.pairAddress && state.bgPrice ? state.bgPrice[current.pairAddress] : null;
+    const autoExitSnapshot = bgEntry
+      ? { ...state.detected, marketCap: bgEntry.marketCapUsd, marketCapSource: "background" }
+      : state.detected;
 
-    const rawStopLossPct = current.stopLossPct;
-    const stopLossPct = rawStopLossPct === null || rawStopLossPct === undefined || rawStopLossPct === ""
-      ? null
-      : Number(rawStopLossPct);
-    if (Number.isFinite(stopLossPct) && stopLossPct < 0 && livePnlPct <= stopLossPct) {
-      await closeTrade(1, { trigger: "stop_loss", reason, snapshot: state.detected });
-      return;
+    const stopLossMode = current.stopLossMode || (current.stopLossMarketCap ? "mc" : "pct");
+    if (stopLossMode === "mc") {
+      const stopLossMarketCap = Number(current.stopLossMarketCap || 0);
+      if (liveMarketCap && Number.isFinite(stopLossMarketCap) && stopLossMarketCap > 0 && liveMarketCap <= stopLossMarketCap) {
+        await closeTrade(1, { trigger: "stop_loss", reason, snapshot: autoExitSnapshot });
+        return;
+      }
+    } else if (livePnlPct !== null) {
+      const rawStopLossPct = current.stopLossPct;
+      const stopLossPct = rawStopLossPct === null || rawStopLossPct === undefined || rawStopLossPct === ""
+        ? null
+        : Number(rawStopLossPct);
+      if (Number.isFinite(stopLossPct) && stopLossPct < 0 && livePnlPct <= stopLossPct) {
+        await closeTrade(1, { trigger: "stop_loss", reason, snapshot: autoExitSnapshot });
+        return;
+      }
     }
 
+    const targetSellMode = current.targetSellMode || (current.targetSellMarketCap ? "mc" : "pct");
+    if (targetSellMode === "mc") {
+      const targetSellMarketCap = Number(current.targetSellMarketCap || 0);
+      if (liveMarketCap && Number.isFinite(targetSellMarketCap) && targetSellMarketCap > 0 && liveMarketCap >= targetSellMarketCap) {
+        await closeTrade(1, { trigger: "target_sell", reason, snapshot: autoExitSnapshot });
+      }
+      return;
+    }
+    if (livePnlPct === null) return;
     const rawTargetSellPct = current.targetSellPct;
     const targetSellPct = rawTargetSellPct === null || rawTargetSellPct === undefined || rawTargetSellPct === ""
       ? null
       : Number(rawTargetSellPct);
     if (Number.isFinite(targetSellPct) && targetSellPct > 0 && livePnlPct >= targetSellPct) {
-      await closeTrade(1, { trigger: "target_sell", reason, snapshot: state.detected });
+      await closeTrade(1, { trigger: "target_sell", reason, snapshot: autoExitSnapshot });
     }
   }
 
@@ -860,13 +1153,21 @@
     if (state.forceOverlay) return true;
     if (!state.detected?.isCoinPage) return false;
     if (!state.detected?.tokenName || state.detected.tokenName === "Unknown") return false;
-    if (!state.detected?.marketCap) return false;
     return true;
   }
 
+  function isTradeReady(snapshot = state.detected) {
+    return Boolean(
+      snapshot?.isCoinPage &&
+      snapshot?.tokenName &&
+      snapshot.tokenName !== "Unknown" &&
+      Number(snapshot?.marketCap || 0) > 0
+    );
+  }
+
   function clampPosition(nextPosition) {
-    const maxLeft = Math.max(12, window.innerWidth - (state.compact ? 332 : 332));
-    const maxTop = Math.max(12, window.innerHeight - (state.compact ? 56 : 300));
+    const maxLeft = Math.max(12, window.innerWidth - 332);
+    const maxTop = Math.max(12, window.innerHeight - 300);
     return {
       left: Math.min(Math.max(12, Math.round(nextPosition.left)), maxLeft),
       top: Math.min(Math.max(12, Math.round(nextPosition.top)), maxTop),
@@ -919,11 +1220,11 @@
     root.className = `td-overlay-root ${state.darkTheme ? "is-dark" : "is-light"}`;
     root.style.display = "block";
     root.dataset.liveOpen = String(state.liveOpen);
-    root.dataset.compact = String(state.compact);
     applyOverlayPosition();
 
     const currentPosition = getCurrentPosition();
     const solBalanceLabel = `${state.virtualBalance.toFixed(2)} SOL`;
+    const tradeReady = isTradeReady();
 
     let livePnlPct = null;
     let livePnlSol = null;
@@ -943,6 +1244,7 @@
     let posSummaryHtml = "";
     let automationControlsHtml = "";
     if (currentPosition) {
+      const automationDraft = getAutomationDraft(currentPosition);
       const sol = state.solPriceUsd;
       const initialSol = currentPosition.initialSizeSol || currentPosition.positionSizeSol;
       const remainingSol = currentPosition.positionSizeSol;
@@ -985,33 +1287,48 @@
             <span class="td-overlay-pos-label">PnL</span>
             <span class="td-overlay-pos-value ${pnlClass}">${pnlStr}</span>
           </div>
+          ${state.advancedTrading ? `
           <div class="td-overlay-pos-item">
             <span class="td-overlay-pos-label">Stop</span>
-            <span class="td-overlay-pos-value">${currentPosition.stopLossPct ? `${Math.abs(currentPosition.stopLossPct).toFixed(1)}%` : "—"}</span>
+            <span class="td-overlay-pos-value">${formatThresholdLabel(currentPosition, "stop")}</span>
           </div>
           <div class="td-overlay-pos-item">
             <span class="td-overlay-pos-label">Target</span>
-            <span class="td-overlay-pos-value">${currentPosition.targetSellPct ? `${currentPosition.targetSellPct.toFixed(1)}%` : "—"}</span>
-          </div>
+            <span class="td-overlay-pos-value">${formatThresholdLabel(currentPosition, "target")}</span>
+          </div>` : ""}
         </div>
       `;
-      automationControlsHtml = `
+      if (state.advancedTrading) automationControlsHtml = `
         <div class="td-overlay-automation">
           <div class="td-overlay-automation-row">
-            <input class="td-overlay-input td-overlay-automation-input" type="number" min="0" step="0.1" placeholder="Stop %" value="${currentPosition.stopLossPct ? Math.abs(currentPosition.stopLossPct) : ""}" data-stop-loss-input />
-            <input class="td-overlay-input td-overlay-automation-input" type="number" min="0" step="0.1" placeholder="Target %" value="${currentPosition.targetSellPct || ""}" data-target-sell-input />
-          </div>
-          <div class="td-overlay-automation-actions">
-            <button class="td-overlay-sell-sub-btn" type="button" data-save-automation>Save levels</button>
-            <button class="td-overlay-sell-sub-btn" type="button" data-clear-automation>Clear</button>
+            <div class="td-overlay-automation-field">
+              <div class="td-overlay-automation-field-head">
+                <span class="td-overlay-pos-label">Stop</span>
+                <div class="td-overlay-automation-modes" data-stop-loss-modes>
+                  <button class="td-overlay-automation-mode${automationDraft.stopLossMode !== "mc" ? " is-active" : ""}" type="button" data-stop-loss-mode="pct">%</button>
+                  <button class="td-overlay-automation-mode${automationDraft.stopLossMode === "mc" ? " is-active" : ""}" type="button" data-stop-loss-mode="mc">MC</button>
+                </div>
+              </div>
+              <input class="td-overlay-input td-overlay-automation-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${automationDraft.stopLossMode === "mc" ? "Stop MC" : "Stop %"}" value="${esc(automationDraft.stopLoss)}" data-stop-loss-input />
+            </div>
+            <div class="td-overlay-automation-field">
+              <div class="td-overlay-automation-field-head">
+                <span class="td-overlay-pos-label">Target</span>
+                <div class="td-overlay-automation-modes" data-target-sell-modes>
+                  <button class="td-overlay-automation-mode${automationDraft.targetSellMode !== "mc" ? " is-active" : ""}" type="button" data-target-sell-mode="pct">%</button>
+                  <button class="td-overlay-automation-mode${automationDraft.targetSellMode === "mc" ? " is-active" : ""}" type="button" data-target-sell-mode="mc">MC</button>
+                </div>
+              </div>
+              <input class="td-overlay-input td-overlay-automation-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${automationDraft.targetSellMode === "mc" ? "Target MC" : "Target %"}" value="${esc(automationDraft.targetSell)}" data-target-sell-input />
+            </div>
           </div>
         </div>
       `;
     }
     const personIcon = `
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <circle cx="12" cy="7" r="4"/>
-        <path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path fill-rule="evenodd" clip-rule="evenodd" d="M12 8.25C9.92894 8.25 8.25 9.92893 8.25 12C8.25 14.0711 9.92894 15.75 12 15.75C14.0711 15.75 15.75 14.0711 15.75 12C15.75 9.92893 14.0711 8.25 12 8.25ZM9.75 12C9.75 10.7574 10.7574 9.75 12 9.75C13.2426 9.75 14.25 10.7574 14.25 12C14.25 13.2426 13.2426 14.25 12 14.25C10.7574 14.25 9.75 13.2426 9.75 12Z" fill="currentColor"/>
+        <path fill-rule="evenodd" clip-rule="evenodd" d="M11.9747 1.25C11.5303 1.24999 11.1592 1.24999 10.8546 1.27077C10.5375 1.29241 10.238 1.33905 9.94761 1.45933C9.27379 1.73844 8.73843 2.27379 8.45932 2.94762C8.31402 3.29842 8.27467 3.66812 8.25964 4.06996C8.24756 4.39299 8.08454 4.66251 7.84395 4.80141C7.60337 4.94031 7.28845 4.94673 7.00266 4.79568C6.64714 4.60777 6.30729 4.45699 5.93083 4.40743C5.20773 4.31223 4.47642 4.50819 3.89779 4.95219C3.64843 5.14353 3.45827 5.3796 3.28099 5.6434C3.11068 5.89681 2.92517 6.21815 2.70294 6.60307L2.67769 6.64681C2.45545 7.03172 2.26993 7.35304 2.13562 7.62723C1.99581 7.91267 1.88644 8.19539 1.84541 8.50701C1.75021 9.23012 1.94617 9.96142 2.39016 10.5401C2.62128 10.8412 2.92173 11.0602 3.26217 11.2741C3.53595 11.4461 3.68788 11.7221 3.68786 12C3.68785 12.2778 3.53592 12.5538 3.26217 12.7258C2.92169 12.9397 2.62121 13.1587 2.39007 13.4599C1.94607 14.0385 1.75012 14.7698 1.84531 15.4929C1.88634 15.8045 1.99571 16.0873 2.13552 16.3727C2.26983 16.6469 2.45535 16.9682 2.67758 17.3531L2.70284 17.3969C2.92507 17.7818 3.11058 18.1031 3.28089 18.3565C3.45817 18.6203 3.64833 18.8564 3.89769 19.0477C4.47632 19.4917 5.20763 19.6877 5.93073 19.5925C6.30717 19.5429 6.647 19.3922 7.0025 19.2043C7.28833 19.0532 7.60329 19.0596 7.8439 19.1986C8.08452 19.3375 8.24756 19.607 8.25964 19.9301C8.27467 20.3319 8.31403 20.7016 8.45932 21.0524C8.73843 21.7262 9.27379 22.2616 9.94761 22.5407C10.238 22.661 10.5375 22.7076 10.8546 22.7292C11.1592 22.75 11.5303 22.75 11.9747 22.75H12.0252C12.4697 22.75 12.8407 22.75 13.1454 22.7292C13.4625 22.7076 13.762 22.661 14.0524 22.5407C14.7262 22.2616 15.2616 21.7262 15.5407 21.0524C15.686 20.7016 15.7253 20.3319 15.7403 19.93C15.7524 19.607 15.9154 19.3375 16.156 19.1985C16.3966 19.0596 16.7116 19.0532 16.9974 19.2042C17.3529 19.3921 17.6927 19.5429 18.0692 19.5924C18.7923 19.6876 19.5236 19.4917 20.1022 19.0477C20.3516 18.8563 20.5417 18.6203 20.719 18.3565C20.8893 18.1031 21.0748 17.7818 21.297 17.3969L21.3223 17.3531C21.5445 16.9682 21.7301 16.6468 21.8644 16.3726C22.0042 16.0872 22.1135 15.8045 22.1546 15.4929C22.2498 14.7697 22.0538 14.0384 21.6098 13.4598C21.3787 13.1586 21.0782 12.9397 20.7378 12.7258C20.464 12.5538 20.3121 12.2778 20.3121 11.9999C20.3121 11.7221 20.464 11.4462 20.7377 11.2742C21.0783 11.0603 21.3788 10.8414 21.6099 10.5401C22.0539 9.96149 22.2499 9.23019 22.1547 8.50708C22.1136 8.19546 22.0043 7.91274 21.8645 7.6273C21.7302 7.35313 21.5447 7.03183 21.3224 6.64695L21.2972 6.60318C21.0749 6.21825 20.8894 5.89688 20.7191 5.64347C20.5418 5.37967 20.3517 5.1436 20.1023 4.95225C19.5237 4.50826 18.7924 4.3123 18.0692 4.4075C17.6928 4.45706 17.353 4.60782 16.9975 4.79572C16.7117 4.94679 16.3967 4.94036 16.1561 4.80144C15.9155 4.66253 15.7524 4.39297 15.7403 4.06991C15.7253 3.66808 15.686 3.2984 15.5407 2.94762C15.2616 2.27379 14.7262 1.73844 14.0524 1.45933C13.762 1.33905 13.4625 1.29241 13.1454 1.27077C12.8407 1.24999 12.4697 1.24999 12.0252 1.25H11.9747ZM10.5216 2.84515C10.5988 2.81319 10.716 2.78372 10.9567 2.76729C11.2042 2.75041 11.5238 2.75 12 2.75C12.4762 2.75 12.7958 2.75041 13.0432 2.76729C13.284 2.78372 13.4012 2.81319 13.4783 2.84515C13.7846 2.97202 14.028 3.21536 14.1548 3.52165C14.1949 3.61826 14.228 3.76887 14.2414 4.12597C14.271 4.91835 14.68 5.68129 15.4061 6.10048C16.1321 6.51968 16.9974 6.4924 17.6984 6.12188C18.0143 5.9549 18.1614 5.90832 18.265 5.89467C18.5937 5.8514 18.9261 5.94047 19.1891 6.14228C19.2554 6.19312 19.3395 6.27989 19.4741 6.48016C19.6125 6.68603 19.7726 6.9626 20.0107 7.375C20.2488 7.78741 20.4083 8.06438 20.5174 8.28713C20.6235 8.50382 20.6566 8.62007 20.6675 8.70287C20.7108 9.03155 20.6217 9.36397 20.4199 9.62698C20.3562 9.70995 20.2424 9.81399 19.9397 10.0041C19.2684 10.426 18.8122 11.1616 18.8121 11.9999C18.8121 12.8383 19.2683 13.574 19.9397 13.9959C20.2423 14.186 20.3561 14.29 20.4198 14.373C20.6216 14.636 20.7107 14.9684 20.6674 15.2971C20.6565 15.3799 20.6234 15.4961 20.5173 15.7128C20.4082 15.9355 20.2487 16.2125 20.0106 16.6249C19.7725 17.0373 19.6124 17.3139 19.474 17.5198C19.3394 17.72 19.2553 17.8068 19.189 17.8576C18.926 18.0595 18.5936 18.1485 18.2649 18.1053C18.1613 18.0916 18.0142 18.045 17.6983 17.8781C16.9973 17.5075 16.132 17.4803 15.4059 17.8995C14.68 18.3187 14.271 19.0816 14.2414 19.874C14.228 20.2311 14.1949 20.3817 14.1548 20.4784C14.028 20.7846 13.7846 21.028 13.4783 21.1549C13.4012 21.1868 13.284 21.2163 13.0432 21.2327C12.7958 21.2496 12.4762 21.25 12 21.25C11.5238 21.25 11.2042 21.2496 10.9567 21.2327C10.716 21.2163 10.5988 21.1868 10.5216 21.1549C10.2154 21.028 9.97201 20.7846 9.84514 20.4784C9.80512 20.3817 9.77195 20.2311 9.75859 19.874C9.72896 19.0817 9.31997 18.3187 8.5939 17.8995C7.86784 17.4803 7.00262 17.5076 6.30158 17.8781C5.98565 18.0451 5.83863 18.0917 5.73495 18.1053C5.40626 18.1486 5.07385 18.0595 4.81084 17.8577C4.74458 17.8069 4.66045 17.7201 4.52586 17.5198C4.38751 17.314 4.22736 17.0374 3.98926 16.625C3.75115 16.2126 3.59171 15.9356 3.4826 15.7129C3.37646 15.4962 3.34338 15.3799 3.33248 15.2971C3.28921 14.9684 3.37828 14.636 3.5801 14.373C3.64376 14.2901 3.75761 14.186 4.0602 13.9959C4.73158 13.5741 5.18782 12.8384 5.18786 12.0001C5.18791 11.1616 4.73165 10.4259 4.06021 10.004C3.75769 9.81389 3.64385 9.70987 3.58019 9.62691C3.37838 9.3639 3.28931 9.03149 3.33258 8.7028C3.34348 8.62001 3.37656 8.50375 3.4827 8.28707C3.59181 8.06431 3.75125 7.78734 3.98935 7.37493C4.22746 6.96253 4.3876 6.68596 4.52596 6.48009C4.66055 6.27983 4.74468 6.19305 4.81093 6.14222C5.07395 5.9404 5.40636 5.85133 5.73504 5.8946C5.83873 5.90825 5.98576 5.95483 6.30173 6.12184C7.00273 6.49235 7.86791 6.51962 8.59394 6.10045C9.31998 5.68128 9.72896 4.91837 9.75859 4.12602C9.77195 3.76889 9.80512 3.61827 9.84514 3.52165C9.97201 3.21536 10.2154 2.97202 10.5216 2.84515Z" fill="currentColor"/>
       </svg>
     `;
     const statsIcon = `
@@ -1035,10 +1352,11 @@
 
     root.innerHTML = `
       <div class="td-overlay-shell">
+          ${state.status ? `<div class="td-overlay-toast td-overlay-toast--${state.statusTone}" data-dismiss-toast>${esc(state.status)}</div>` : ""}
           <div class="td-overlay-head">
             <div style="display:flex;align-items:center;gap:4px">
               <button class="td-overlay-icon-btn td-overlay-icon-btn-pos${state.posNavOpen ? " is-active" : ""}" type="button" data-pos-toggle aria-label="Toggle live trades">${listIcon}</button>
-              <a class="td-overlay-icon-btn" href="${config.dashboardUrl}" target="_blank" rel="noopener noreferrer" data-dashboard-link aria-label="Open dashboard">${statsIcon}</a>
+              <button class="td-overlay-icon-btn" type="button" data-dashboard-link aria-label="Open dashboard">${statsIcon}</button>
             </div>
             <button class="td-overlay-balance" type="button" data-open-balance style="display:flex;align-items:center;gap:5px">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path fill-rule="evenodd" clip-rule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solG)"/><defs><linearGradient id="solG" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stop-color="#9945FF"/><stop offset="0.24" stop-color="#8752F3"/><stop offset="0.465" stop-color="#5497D5"/><stop offset="0.6" stop-color="#43B4CA"/><stop offset="0.735" stop-color="#28E0B9"/><stop offset="1" stop-color="#19FB9B"/></linearGradient></defs></svg>
@@ -1047,14 +1365,24 @@
             </button>
             <div class="td-overlay-head-actions">
               <button class="td-overlay-icon-btn td-overlay-icon-btn-settings" type="button" data-open-settings aria-label="Account settings">${personIcon}</button>
+              ${state.settingsOpen ? `
+                <div class="td-overlay-settings-panel">
+                  <div class="td-overlay-settings-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--td-border-subtle)" data-toggle-advanced>
+                    <div>
+                      <div style="font-size:12px;font-weight:500;color:var(--td-text)">Advanced trading</div>
+                      <div style="font-size:10px;color:var(--td-text-faint);margin-top:1px">Stop loss &amp; target sell</div>
+                    </div>
+                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.advancedTrading ? "#4ade80" : "var(--td-text-faint)"}">${state.advancedTrading ? "ON" : "OFF"}</span>
+                  </div>
+                  <div class="td-overlay-settings-row" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;cursor:pointer" data-toggle-debug>
+                    <span style="font-size:11px;color:var(--td-text-dim)">Debug logging</span>
+                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.debugLogging ? "#4ade80" : "var(--td-text-faint)"}">${state.debugLogging ? "ON" : "OFF"}</span>
+                  </div>
+                  ${state.user ? `<button class="td-overlay-settings-signout" type="button" data-sign-out>Sign out</button>` : ""}
+                </div>
+              ` : ""}
             </div>
           </div>
-
-          ${state.settingsOpen ? `
-            <div class="td-overlay-settings-panel">
-              ${state.user ? `<button class="td-overlay-settings-signout" type="button" data-sign-out>Sign out</button>` : ""}
-            </div>
-          ` : ""}
 
         <div class="td-overlay-panel">
           ${!state.user ? `
@@ -1084,9 +1412,10 @@
                       const isCurrent = pos.positionId === currentPosition?.positionId;
                       const sol = state.solPriceUsd;
                       const sizeLabel = sol ? "$" + (pos.positionSizeSol * sol).toFixed(0) : pos.positionSizeSol.toFixed(3) + " SOL";
-                      return `<a class="td-overlay-pos-nav-row${isCurrent ? " is-current" : ""}" href="${pos.pageUrl || "#"}" data-pos-nav title="Go to ${pos.tokenName}">
-                        <span class="td-overlay-pos-nav-name">${pos.tokenName}</span>
-                        <span class="td-overlay-pos-nav-size">${sizeLabel}</span>
+                      const safeHref = pos.pageUrl && /^https?:\/\//i.test(pos.pageUrl) ? esc(pos.pageUrl) : "#";
+                      return `<a class="td-overlay-pos-nav-row${isCurrent ? " is-current" : ""}" href="${safeHref}" data-pos-nav title="Go to ${esc(pos.tokenName)}">
+                        <span class="td-overlay-pos-nav-name">${esc(pos.tokenName)}${pos.tokenFullName ? `<span class="td-overlay-pos-nav-fullname"> ${esc(pos.tokenFullName)}</span>` : ""}</span>
+                        <span class="td-overlay-pos-nav-size">${esc(sizeLabel)}</span>
                       </a>`;
                     }).join("")}
                   </div>
@@ -1096,15 +1425,24 @@
               <div class="td-overlay-preset-grid">
                 ${BUY_PRESETS.map(value => {
                   const totalRequired = Number((value + FEE_PER_TRADE).toFixed(4));
-                  const disabled = state.virtualBalance < totalRequired;
+                  const disabled = !tradeReady || state.virtualBalance < totalRequired;
                   const button = `<button class="td-overlay-preset" type="button" data-buy="${value}" ${disabled ? "disabled" : ""}>${value} SOL</button>`;
                   return disabled
-                    ? `<span class="td-overlay-disabled-hint" data-hint="Need ${totalRequired.toFixed(2)} SOL including fee">${button}</span>`
+                    ? `<span class="td-overlay-disabled-hint" data-hint="${!tradeReady ? "Waiting for live coin data" : `Need ${totalRequired.toFixed(2)} SOL including fee`}">${button}</span>`
                     : button;
                 }).join("")}
               </div>
 
               <div class="td-overlay-label">Sell</div>
+              ${currentPosition ? (() => {
+                const ca = currentPosition.contractAddress || "";
+                const shortCa = ca ? ca.slice(0, 4) + "…" + ca.slice(-4) : "";
+                const fullName = currentPosition.tokenFullName || "";
+                return `<div class="td-overlay-pos-token-header">
+                  ${fullName ? `<span class="td-overlay-pos-token-fullname">${esc(fullName)}</span>` : ""}
+                  ${ca ? `<button class="td-overlay-pos-ca-copy" type="button" data-copy-ca="${esc(ca)}" title="Copy contract address">${esc(shortCa)} <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ""}
+                </div>`;
+              })() : ""}
               ${posSummaryHtml}
               ${automationControlsHtml}
               <div class="td-overlay-sell-stack">
@@ -1121,25 +1459,72 @@
       </div>
     `;
 
+    root.querySelector("[data-dismiss-toast]")?.addEventListener("click", () => {
+      clearTimeout(statusDismissTimer);
+      state.status = "";
+      render();
+    });
+
+    root.querySelectorAll("[data-copy-ca]").forEach(el => el.addEventListener("click", e => {
+      e.stopPropagation();
+      const ca = el.dataset.copyCa;
+      if (!ca) return;
+      navigator.clipboard.writeText(ca).then(() => {
+        setStatus("CA copied.", "neutral");
+      }).catch(() => {});
+    }));
+
     root.querySelector("[data-pos-toggle]")?.addEventListener("click", () => {
       state.posNavOpen = !state.posNavOpen;
       render();
     });
 
+    root.querySelectorAll("[data-pos-nav]").forEach(el => el.addEventListener("click", () => {
+      state.posNavOpen = false;
+      render();
+    }));
+
     root.querySelectorAll("[data-open-balance]").forEach(el => el.addEventListener("click", () => {
       openDashboardBalanceModal();
     }));
 
-    root.querySelectorAll("[data-open-settings]").forEach(el => el.addEventListener("click", () => {
+    root.querySelectorAll("[data-dashboard-link]").forEach(el => el.addEventListener("click", () => {
+      openDashboard();
+    }));
+
+    root.querySelectorAll("[data-open-settings]").forEach(el => el.addEventListener("click", e => {
       if (!state.user) return;
+      e.stopPropagation();
       state.settingsOpen = !state.settingsOpen;
       render();
     }));
+
+    if (state.settingsOpen) {
+      const closeSettings = e => {
+        if (!root.querySelector(".td-overlay-settings-panel")?.contains(e.target)) {
+          state.settingsOpen = false;
+          render();
+        }
+      };
+      setTimeout(() => document.addEventListener("click", closeSettings, { once: true }), 0);
+    }
 
     root.querySelector("[data-sign-out]")?.addEventListener("click", async () => {
       await signOutCurrentUser();
       state.settingsOpen = false;
       setStatus("Signed out.", "neutral");
+      render();
+    });
+
+    root.querySelector("[data-toggle-advanced]")?.addEventListener("click", async () => {
+      state.advancedTrading = !state.advancedTrading;
+      await saveAdvancedTrading();
+      render();
+    });
+
+    root.querySelector("[data-toggle-debug]")?.addEventListener("click", async () => {
+      state.debugLogging = !state.debugLogging;
+      await saveDebugLogging();
       render();
     });
 
@@ -1159,9 +1544,10 @@
       render();
       try {
         state.user = await signIn(email, password);
+        sentryUser(state.user);
         await loadTrades();
         await loadOpenPositionsFromBackend();
-        setStatus("Connected. Sync is active.", "good");
+        await flushCloseQueue();
       } catch (error) {
         setStatus(error.message || "Sign-in failed.", "bad");
       } finally {
@@ -1182,6 +1568,7 @@
           }
           const snapshot = detectPageSnapshot();
           state.detected = snapshot;
+          sentryCrumb("trade", "BUY attempted", { token: snapshot.tokenName, ca: snapshot.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, size });
           if (!snapshot.marketCap) {
             throw new Error("Overlay is forced on, but market cap is still not being detected on this page.");
           }
@@ -1191,19 +1578,25 @@
           state.openPositions[positionKey] = {
             ...nextPosition,
             backendTradeId: nextPosition.backendTradeId || null,
+            storageKey: positionKey,
           };
           await saveOpenPositions();
-          state.virtualBalance = Number(Math.max(0, state.virtualBalance - size).toFixed(4));
+          state.virtualBalance = Number(Math.max(0, state.virtualBalance - size - FEE_PER_TRADE).toFixed(4));
           await saveVirtualBalance();
+          syncDashboardStateImmediately();
 
           const backendTradeId = await persistOpenPosition(state.openPositions[positionKey]);
           state.openPositions[positionKey] = {
             ...state.openPositions[positionKey],
             backendTradeId,
+            storageKey: positionKey,
           };
           await saveOpenPositions();
-          setStatus(`Position synced: ${state.openPositions[positionKey].positionSizeSol.toFixed(2)} SOL`, "good");
+          syncDashboardStateImmediately();
+          debugLog("BUY", { token: snapshot.tokenName, ca: snapshot.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, size, backendTradeId });
+          setStatus("", "neutral");
         } catch (error) {
+          sentryError(error, { action: "buy", token: state.detected?.tokenName, mc: state.detected?.marketCap, mcSource: state.detected?.marketCapSource });
           setStatus(error.message || "Could not open live trade.", "bad");
         } finally {
           state.tradeBusy = false;
@@ -1223,46 +1616,60 @@
       await closeTradeByAmount(initialSize);
     });
 
-    root.querySelector("[data-save-automation]")?.addEventListener("click", async () => {
+    const stopLossInput = root.querySelector("[data-stop-loss-input]");
+    const targetSellInput = root.querySelector("[data-target-sell-input]");
+    const persistAutomationFromInputs = async () => {
       const current = getCurrentPosition();
-      if (!current || !state.user) return;
-      const stopLossPct = normalizeStopLossPct(root.querySelector("[data-stop-loss-input]")?.value || "");
-      const targetSellPct = normalizeTargetSellPct(root.querySelector("[data-target-sell-input]")?.value || "");
-      const snapshot = state.detected || detectPageSnapshot();
-      const nextPosition = {
-        ...current,
-        stopLossPct,
-        targetSellPct,
-        lastCapture: createCaptureMeta(snapshot),
-        events: appendPositionEvent(current, createPositionEvent("automation_updated", snapshot, {
-          stopLossPct,
-          targetSellPct,
-        })),
+      if (!current || !state.user || state.tradeBusy) return;
+      const draft = getAutomationDraft(current);
+      const values = {
+        stopLossMode: draft.stopLossMode || "pct",
+        stopLoss: stopLossInput?.value.trim() || "",
+        targetSellMode: draft.targetSellMode || "pct",
+        targetSell: targetSellInput?.value.trim() || "",
       };
-      nextPosition.backendTradeId = await persistOpenPosition(nextPosition);
-      state.openPositions[getPositionKey(nextPosition)] = nextPosition;
-      await saveOpenPositions();
-      setStatus("Stop loss / target saved.", "good");
-      render();
-      await maybeRunAutoExit("settings-update");
-    });
-
-    root.querySelector("[data-clear-automation]")?.addEventListener("click", async () => {
-      const current = getCurrentPosition();
-      if (!current || !state.user) return;
-      const snapshot = state.detected || detectPageSnapshot();
-      const nextPosition = {
-        ...current,
-        stopLossPct: null,
-        targetSellPct: null,
-        lastCapture: createCaptureMeta(snapshot),
-        events: appendPositionEvent(current, createPositionEvent("automation_cleared", snapshot, {})),
-      };
-      nextPosition.backendTradeId = await persistOpenPosition(nextPosition);
-      state.openPositions[getPositionKey(nextPosition)] = nextPosition;
-      await saveOpenPositions();
-      setStatus("Auto-sell levels cleared.", "good");
-      render();
+      setAutomationDraft(current, values);
+      await saveAutomationLevels(current, values);
+    };
+    const bindAutomationInput = (input, field) => {
+      if (!input) return;
+      input.addEventListener("input", () => {
+        const current = getCurrentPosition();
+        if (!current) return;
+        setAutomationDraft(current, { [field]: input.value });
+      });
+      input.addEventListener("keydown", event => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        void persistAutomationFromInputs();
+      });
+      input.addEventListener("blur", () => {
+        window.setTimeout(() => {
+          renderUnlessEditing();
+        }, 0);
+      });
+    };
+    bindAutomationInput(stopLossInput, "stopLoss");
+    bindAutomationInput(targetSellInput, "targetSell");
+    root.querySelectorAll("[data-stop-loss-mode], [data-target-sell-mode]").forEach(button => {
+      button.addEventListener("click", () => {
+        const current = getCurrentPosition();
+        if (!current) return;
+        if (button.hasAttribute("data-stop-loss-mode")) {
+          const nextMode = button.getAttribute("data-stop-loss-mode") === "mc" ? "mc" : "pct";
+          setAutomationDraft(current, {
+            stopLossMode: nextMode,
+            stopLoss: "",
+          });
+        } else {
+          const nextMode = button.getAttribute("data-target-sell-mode") === "mc" ? "mc" : "pct";
+          setAutomationDraft(current, {
+            targetSellMode: nextMode,
+            targetSell: "",
+          });
+        }
+        render();
+      });
     });
 
   }
@@ -1273,6 +1680,7 @@
     if (!current || !state.user) return;
 
     state.tradeBusy = true;
+    sentryCrumb("trade", "SELL attempted", { token: current.tokenName, ca: current.contractAddress, fraction, trigger: options.trigger || "manual" });
     try {
       const snapshot = resolveSnapshotForClose(current, options.snapshot || null);
       state.detected = snapshot;
@@ -1285,6 +1693,7 @@
       const closeMeta = {
         trigger: options.trigger || "manual",
         reason: options.reason || "manual",
+        positionId: current.positionId || null,
         tokenName: current.tokenName,
         fraction: Number(fraction.toFixed(6)),
         sizeSol: Number(positionSizeSol.toFixed(4)),
@@ -1304,48 +1713,75 @@
         trigger: options.trigger || "manual",
         reason: options.reason || "manual",
       });
-      await insertTrade({
-        user_id: state.user.id,
+      const closeTradePayload = {
         token_name: current.tokenName,
         pnl_sol: Number(pnlSol.toFixed(6)),
         pnl_percentage: Number(pnlPercentage.toFixed(2)),
-        entry_market_cap: Number(current.entryMarketCap.toFixed(2)),
-        exit_market_cap: Number(snapshot.marketCap.toFixed(2)),
+        entry_market_cap: Number((current.entryMarketCap || 0).toFixed(2)),
+        exit_market_cap: Number((snapshot.marketCap || 0).toFixed(2)),
         notes: encodeCloseTradeNote(closeMeta),
         trade_timestamp: new Date().toISOString(),
-      });
+      };
 
+      // Update local state first — this always succeeds
+      // Use the key the position was actually stored under to avoid CA vs tokenName mismatch
+      const posKey = current.storageKey || getPositionKey(current);
+      let nextOpenPosition = null;
       if (fraction >= 1) {
-        if (current.backendTradeId) {
-          await deleteTrade(current.backendTradeId);
-        }
-        delete state.openPositions[getPositionKey(current)];
-        if (current.contractAddress && state.openPositions[current.tokenName]) {
+        delete state.openPositions[posKey];
+        // Also clean up any legacy tokenName alias
+        if (current.contractAddress && posKey !== current.tokenName) {
           delete state.openPositions[current.tokenName];
         }
       } else {
         const remainingPositionSizeSol = Number((current.positionSizeSol * (1 - fraction)).toFixed(4));
-        const nextOpenPosition = {
+        nextOpenPosition = {
           ...current,
           positionSizeSol: remainingPositionSizeSol,
           realizedPnlSol: Number(((current.realizedPnlSol || 0) + pnlSol).toFixed(6)),
           lastCapture: createCaptureMeta(snapshot),
           events: appendPositionEvent(current, closeEvent),
         };
-        nextOpenPosition.backendTradeId = await persistOpenPosition(nextOpenPosition);
-        state.openPositions[getPositionKey(nextOpenPosition)] = nextOpenPosition;
-        if (current.contractAddress && state.openPositions[current.tokenName]) {
+        state.openPositions[posKey] = nextOpenPosition;
+        // Also clean up any legacy tokenName alias
+        if (current.contractAddress && posKey !== current.tokenName) {
           delete state.openPositions[current.tokenName];
         }
       }
 
-      const returnedSol = positionSizeSol + pnlSol;
-      state.virtualBalance = Number((state.virtualBalance + returnedSol).toFixed(4));
+      const returnedSol = positionSizeSol + pnlSol - FEE_PER_TRADE;
+      state.virtualBalance = Number((state.virtualBalance + Math.max(0, returnedSol)).toFixed(4));
       await saveVirtualBalance();
       await saveOpenPositions();
-      await loadTrades();
-      setStatus(options.trigger === "stop_loss" ? "Stop loss hit. Trade closed." : options.trigger === "target_sell" ? "Target hit. Trade closed." : "Trade sync completed.", "good");
+      syncDashboardStateImmediately();
+
+      // Sync to Supabase — queue on failure so local state is never rolled back
+      try {
+        await insertTrade({ user_id: state.user.id, ...closeTradePayload });
+        if (fraction >= 1 && current.backendTradeId) {
+          await deleteTrade(current.backendTradeId);
+        } else if (nextOpenPosition) {
+          nextOpenPosition.backendTradeId = await persistOpenPosition(nextOpenPosition);
+          state.openPositions[posKey] = nextOpenPosition;
+          await saveOpenPositions();
+          syncDashboardStateImmediately();
+        }
+        await loadTrades();
+      } catch (_syncError) {
+        await enqueueClose({
+          closeTradePayload,
+          openTradeIdToDelete: fraction >= 1 ? (current.backendTradeId || null) : null,
+          updatedOpenPosition: nextOpenPosition,
+        });
+      }
+      debugLog("SELL", { token: current.tokenName, ca: current.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, sizeSol: positionSizeSol, pnlSol, fraction, trigger: options.trigger || "manual", openTradeId: current.backendTradeId });
+      if (options.trigger === "stop_loss" || options.trigger === "target_sell") {
+        setStatus(options.trigger === "stop_loss" ? "Stop loss hit." : "Target hit.", "neutral");
+      } else {
+        setStatus("", "neutral");
+      }
     } catch (error) {
+      sentryError(error, { action: "sell", token: current.tokenName, ca: current.contractAddress, fraction, trigger: options.trigger || "manual", mc: state.detected?.marketCap, mcSource: state.detected?.marketCapSource });
       setStatus(error.message || "Could not close live trade.", "bad");
     } finally {
       state.tradeBusy = false;
@@ -1383,24 +1819,26 @@
       });
     }
 
-    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, OVERLAY_COMPACT_KEY, VIRTUAL_BALANCE_KEY, BG_PRICE_KEY, OVERLAY_DARK_THEME_KEY]);
+    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, VIRTUAL_BALANCE_KEY, BG_PRICE_KEY, OVERLAY_DARK_THEME_KEY, DEBUG_LOGGING_KEY, ADVANCED_TRADING_KEY]);
     state.session = stored.td_session || null;
     state.openPositions = stored[OPEN_POSITIONS_KEY] || {};
     state.enabled = stored[EXTENSION_ENABLED_KEY] !== false;
     state.forceOverlay = stored[FORCE_OVERLAY_KEY] === true;
-    state.compact = Boolean(stored[OVERLAY_COMPACT_KEY]);
     state.position = clampPosition(stored[OVERLAY_POSITION_KEY] || state.position);
     state.virtualBalance = Number(stored[VIRTUAL_BALANCE_KEY] || 0);
     state.bgPrice = stored[BG_PRICE_KEY] || null;
     state.darkTheme = stored[OVERLAY_DARK_THEME_KEY] !== false;
+    state.debugLogging = stored[DEBUG_LOGGING_KEY] === true;
+    state.advancedTrading = stored[ADVANCED_TRADING_KEY] === true;
     state.detected = detectPageSnapshot();
 
     if (state.session?.access_token) {
       try {
         state.user = await withSession(async accessToken => fetchUser(accessToken));
+        sentryUser(state.user);
         await loadTrades();
         await loadOpenPositionsFromBackend();
-        setStatus("Sync is active.", "good");
+        await flushCloseQueue();
       } catch (_error) {
         await clearSession();
       }
@@ -1412,61 +1850,175 @@
       const nextSnapshot = detectPageSnapshot();
       const nextKey = `${location.href}|${nextSnapshot.tokenName}|${nextSnapshot.marketCap || ""}|${nextSnapshot.isCoinPage}`;
       if (nextKey === lastPageKey) return;
+      const prevDetected = state.detected;
       lastPageKey = nextKey;
       state.detected = nextSnapshot;
-      render();
+      renderUnlessEditing();
       void maybeRunAutoExit("page-refresh");
+      debugLog("PAGE changed", { token: nextSnapshot.tokenName, ca: nextSnapshot.contractAddress, mc: nextSnapshot.marketCap, mcSource: nextSnapshot.marketCapSource });
+      // When navigating to a new coin, reload positions from backend so any
+      // position created on another device or after an extension restart is resumed.
+      const coinChanged = nextSnapshot.isCoinPage && state.user && (
+        prevDetected?.contractAddress !== nextSnapshot.contractAddress ||
+        prevDetected?.tokenName !== nextSnapshot.tokenName
+      );
+      if (coinChanged) {
+        void loadOpenPositionsFromBackend().then(() => renderUnlessEditing()).catch(() => {});
+      }
+    }
+
+    function schedulePageRefresh(delay = 80) {
+      clearTimeout(pageRefreshTimer);
+      pageRefreshTimer = window.setTimeout(refreshPageSnapshot, delay);
+    }
+
+    function clearRouteRefreshBurst() {
+      routeBurstTimers.forEach(timer => window.clearTimeout(timer));
+      routeBurstTimers = [];
+    }
+
+    function runRouteRefreshBurst() {
+      clearRouteRefreshBurst();
+      refreshPageSnapshot();
+      routeBurstTimers = [45, 120, 260].map(delay => (
+        window.setTimeout(refreshPageSnapshot, delay)
+      ));
+    }
+
+    function hideOverlayImmediatelyForRouteExit() {
+      if (isImmediateCoinRoute()) return;
+      if (!state.detected?.isCoinPage && root.style.display === "none") return;
+      state.detected = {
+        tokenName: "Unknown",
+        tokenFullName: null,
+        marketCap: null,
+        marketCapSource: "missing",
+        marketCapText: "",
+        contractAddress: "",
+        pairAddress: "",
+        pageUrl: location.href,
+        isCoinPage: false,
+        capturedAt: Date.now(),
+      };
+      lastPageKey = "";
+      render();
+    }
+
+    function getPathnameFromNavigationTarget(target) {
+      if (!target) return null;
+      try {
+        return new URL(String(target), location.href).pathname;
+      } catch {
+        return null;
+      }
+    }
+
+    function prehideForNavigationTarget(target) {
+      const nextPathname = getPathnameFromNavigationTarget(target);
+      if (!nextPathname) return;
+      if (isImmediateCoinRoute(nextPathname)) return;
+      if (!state.detected?.isCoinPage) return;
+      state.detected = {
+        tokenName: "Unknown",
+        tokenFullName: null,
+        marketCap: null,
+        marketCapSource: "missing",
+        marketCapText: "",
+        contractAddress: "",
+        pairAddress: "",
+        pageUrl: new URL(String(target), location.href).toString(),
+        isCoinPage: false,
+        capturedAt: Date.now(),
+      };
+      lastPageKey = "";
+      render();
+    }
+
+    function patchHistoryNavigation() {
+      if (historyPatched) return;
+      historyPatched = true;
+      const dispatchNavigation = () => window.dispatchEvent(new Event("td:navigation"));
+      for (const method of ["pushState", "replaceState"]) {
+        const original = window.history[method];
+        if (typeof original !== "function") continue;
+        window.history[method] = function (...args) {
+          prehideForNavigationTarget(args[2]);
+          const result = original.apply(this, args);
+          dispatchNavigation();
+          return result;
+        };
+      }
     }
 
     lastPageKey = "";
     refreshPageSnapshot();
+    patchHistoryNavigation();
 
     const observer = new MutationObserver(() => {
-      clearTimeout(pageRefreshTimer);
-      pageRefreshTimer = window.setTimeout(() => {
-        refreshPageSnapshot();
-      }, 140);
+      schedulePageRefresh(70);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
     window.addEventListener("pointerup", () => {
-      clearTimeout(pageRefreshTimer);
-      pageRefreshTimer = window.setTimeout(refreshPageSnapshot, 60);
+      schedulePageRefresh(24);
     }, true);
-    window.addEventListener("popstate", refreshPageSnapshot);
-    window.setInterval(refreshPageSnapshot, 700);
+    document.addEventListener("click", event => {
+      const anchor = event.target?.closest?.("a[href]");
+      if (!anchor) return;
+      if (anchor.target === "_blank" || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      prehideForNavigationTarget(anchor.getAttribute("href"));
+    }, true);
+    const handleRouteSignal = () => {
+      hideOverlayImmediatelyForRouteExit();
+      runRouteRefreshBurst();
+    };
+    window.addEventListener("popstate", handleRouteSignal);
+    window.addEventListener("hashchange", handleRouteSignal);
+    window.addEventListener("td:navigation", handleRouteSignal);
+    document.addEventListener("DOMContentLoaded", handleRouteSignal, { once: true });
+    window.addEventListener("load", handleRouteSignal, { once: true });
+    window.setInterval(refreshPageSnapshot, 450);
 
     chrome.storage.onChanged.addListener(changes => {
       if (changes[EXTENSION_ENABLED_KEY]) {
         state.enabled = changes[EXTENSION_ENABLED_KEY].newValue !== false;
-        render();
+        renderUnlessEditing();
       }
       if (changes[FORCE_OVERLAY_KEY]) {
         state.forceOverlay = changes[FORCE_OVERLAY_KEY].newValue === true;
-        render();
+        renderUnlessEditing();
       }
       if (changes[OPEN_POSITIONS_KEY]) {
         state.openPositions = changes[OPEN_POSITIONS_KEY].newValue || {};
-        render();
+        renderUnlessEditing();
       }
       if (changes[BG_PRICE_KEY]) {
         state.bgPrice = changes[BG_PRICE_KEY].newValue || null;
-        render();
+        void maybeRunAutoExit("bg-price-update");
+        renderUnlessEditing();
       }
       if (changes[VIRTUAL_BALANCE_KEY]) {
         state.virtualBalance = Number(changes[VIRTUAL_BALANCE_KEY].newValue || 0);
-        render();
+        renderUnlessEditing();
       }
       if (changes[OVERLAY_DARK_THEME_KEY]) {
         state.darkTheme = changes[OVERLAY_DARK_THEME_KEY].newValue !== false;
-        render();
+        renderUnlessEditing();
+      }
+      if (changes[DEBUG_LOGGING_KEY]) {
+        state.debugLogging = changes[DEBUG_LOGGING_KEY].newValue === true;
+        renderUnlessEditing();
+      }
+      if (changes[ADVANCED_TRADING_KEY]) {
+        state.advancedTrading = changes[ADVANCED_TRADING_KEY].newValue === true;
+        renderUnlessEditing();
       }
       if (changes["td_session"]) {
         const newSession = changes["td_session"].newValue;
         if (newSession?.access_token && !state.user) {
           state.session = newSession;
           withSession(async at => fetchUser(at))
-            .then(async user => { state.user = user; await loadTrades(); await loadOpenPositionsFromBackend(); })
+            .then(async user => { state.user = user; await loadTrades(); await loadOpenPositionsFromBackend(); await flushCloseQueue(); })
             .catch(async () => { await clearSession(); })
             .finally(() => render());
         } else if (!newSession && state.user) {
@@ -1475,6 +2027,12 @@
           state.trades = [];
           render();
         }
+      }
+    });
+
+    chrome.runtime.onMessage.addListener(message => {
+      if (message?.type === "td_check_auto_exit") {
+        void maybeRunAutoExit("bg-alarm");
       }
     });
   }

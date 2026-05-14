@@ -75,6 +75,7 @@ export function mergeImportedTrades(trades, setSessions, good = "", bad = "") {
     tradeList: dayTrades.map((trade, i) => ({
       id: trade.id || (date + "_" + i),
       instrument: trade.tokenName || "?",
+      positionId: trade.positionId || null,
       pnl: parseFloat((trade.pnlSol || 0).toFixed(6)),
       pnlPct: parseFloat((trade.pnlPercentage || 0).toFixed(2)),
       entryMC: trade.entryMarketCap || 0,

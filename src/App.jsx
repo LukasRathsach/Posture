@@ -23,7 +23,11 @@ import {
   claimInvite,
   generateInvite,
   listInvites,
+  deleteCurrentUser,
 } from "./api";
+import { attachPostureBridge, postOpenPositionsUpdate, postSessionUpdate } from "./postureBridge";
+import { EmptyState, InlineLoader, StatusNotice } from "./uiPrimitives";
+import { getCollectionUiState, getSyncPresentation, UI_STATE } from "./uiState";
 
 const DAYS = ["M", "T", "W", "T", "F", "S", "S"];
 const MISSION_TARGETS = {
@@ -291,9 +295,15 @@ export default function App() {
   const [inviteListLoading, setInviteListLoading] = useState(false);
   const [inviteGenBusy, setInviteGenBusy] = useState(false);
   const [inviteCopied, setInviteCopied] = useState("");
+  const [inviteStatus, setInviteStatus] = useState(null);
+  const [livePositionsStatus, setLivePositionsStatus] = useState(null);
+  const [syncFlash, setSyncFlash] = useState("");
+  const [openTradeDeleteBusyId, setOpenTradeDeleteBusyId] = useState("");
   const initialized = useRef(false);
   const saveTimer = useRef(null);
   const lastSyncedTradeKey = useRef("");
+  const transientTimers = useRef({});
+  const previousSyncStatus = useRef(syncStatus);
   const isLocalMode = !hasSupabaseConfig;
   const isAdmin = authUser?.email === "lukas@rathsach.com";
   const now = new Date();
@@ -308,6 +318,21 @@ export default function App() {
       setAuthMode("sign-up");
       window.history.replaceState({}, "", window.location.pathname);
     }
+  }, []);
+
+  const showTransientMessage = (key, setter, nextValue, timeout = 2200) => {
+    if (transientTimers.current[key]) {
+      window.clearTimeout(transientTimers.current[key]);
+    }
+    setter(nextValue);
+    transientTimers.current[key] = window.setTimeout(() => {
+      setter(null);
+      delete transientTimers.current[key];
+    }, timeout);
+  };
+
+  useEffect(() => () => {
+    Object.values(transientTimers.current).forEach(timer => window.clearTimeout(timer));
   }, []);
 
   // ── Auth / Supabase sync ──────────────────────────────────────────────────
@@ -348,25 +373,14 @@ export default function App() {
         setSyncStatus("loading");
       }
       // Sync session to extension
-      window.postMessage({
-        source: "posture-page",
-        type: "session_update",
-        access_token: session?.access_token ?? null,
-        refresh_token: session?.refresh_token ?? null,
-        user: session?.user ?? null,
-      }, "*");
+      postSessionUpdate(session);
     });
 
-    const handleBridgeMessage = async e => {
-      if (e.source !== window) return;
-      if (e.data?.source !== "posture-bridge") return;
-      if (e.data?.type === "inject_session") {
-        const { access_token, refresh_token } = e.data;
-        if (!access_token || !refresh_token) return;
+    const detachBridge = attachPostureBridge({
+      onInjectSession: async ({ access_token, refresh_token }) => {
         try { await setSessionFromTokens(access_token, refresh_token); } catch (_) {}
-      }
-      if (e.data?.type === "inject_balance") {
-        const next = e.data.value;
+      },
+      onInjectBalance: next => {
         if (next === null || next === undefined) {
           setVirtualBalance(0);
           localStorage.removeItem("posture_virtual_balance");
@@ -378,15 +392,13 @@ export default function App() {
           setVirtualBalance(rounded);
           localStorage.setItem("posture_virtual_balance", String(rounded));
         }
-      }
-      if (e.data?.type === "inject_open_positions") {
-        const next = e.data.value;
+      },
+      onInjectOpenPositions: next => {
         const normalized = next && typeof next === "object" ? next : {};
         setExtensionOpenPositions(normalized);
         localStorage.setItem("posture_extension_open_positions", JSON.stringify(normalized));
-      }
-    };
-    window.addEventListener("message", handleBridgeMessage);
+      },
+    });
 
     const handleStorage = e => {
       if (e.key === "posture_virtual_balance") {
@@ -407,7 +419,7 @@ export default function App() {
     return () => {
       alive = false;
       data.subscription.unsubscribe();
-      window.removeEventListener("message", handleBridgeMessage);
+      detachBridge();
       window.removeEventListener("storage", handleStorage);
     };
   }, [isLocalMode]);
@@ -452,8 +464,19 @@ export default function App() {
       saveSessions(authUser.id, sessions)
         .then(() => setSyncStatus("ok"))
         .catch(() => setSyncStatus("error"));
-    }, 1200);
+      }, 1200);
   }, [authUser, isLocalMode, sessions]);
+
+  useEffect(() => {
+    const previous = previousSyncStatus.current;
+    if (syncStatus === "ok" && previous !== "ok" && previous !== "loading") {
+      showTransientMessage("sync-flash", setSyncFlash, "Session synced");
+    }
+    if (syncStatus === "local" && previous !== "local" && previous !== "loading") {
+      showTransientMessage("sync-flash", setSyncFlash, "Saved on this device");
+    }
+    previousSyncStatus.current = syncStatus;
+  }, [syncStatus]);
 
   useEffect(() => {
     if (isLocalMode || !authUser) return;
@@ -511,6 +534,32 @@ export default function App() {
     if (mc >= 1e6) return `$${(mc / 1e6).toFixed(2)}M`;
     if (mc >= 1e3) return `$${(mc / 1e3).toFixed(1)}K`;
     return `$${mc.toFixed(0)}`;
+  };
+
+  const syncExtensionOpenPositions = nextPositions => {
+    const normalized = nextPositions && typeof nextPositions === "object" ? nextPositions : {};
+    setExtensionOpenPositions(normalized);
+    localStorage.setItem("posture_extension_open_positions", JSON.stringify(normalized));
+    postOpenPositionsUpdate(normalized);
+    showTransientMessage("live-positions-status", setLivePositionsStatus, {
+      tone: "success",
+      title: "Live positions refreshed",
+      detail: `${Object.keys(normalized).length} tracked ${Object.keys(normalized).length === 1 ? "position" : "positions"} in sync.`,
+    });
+  };
+
+  const formatProtectionLevel = (pos, kind) => {
+    if (!pos) return "—";
+    if (kind === "stop") {
+      if ((pos.stopLossMode || "pct") === "mc") {
+        return pos.stopLossMarketCap ? `${formatAuditMc(pos.stopLossMarketCap)} MC` : "—";
+      }
+      return pos.stopLossPct ? `${Math.abs(pos.stopLossPct).toFixed(1)}%` : "—";
+    }
+    if ((pos.targetSellMode || "pct") === "mc") {
+      return pos.targetSellMarketCap ? `${formatAuditMc(pos.targetSellMarketCap)} MC` : "—";
+    }
+    return pos.targetSellPct ? `${pos.targetSellPct.toFixed(1)}%` : "—";
   };
 
   const formatTimelineTime = timestamp => {
@@ -694,6 +743,25 @@ export default function App() {
     }
   }
 
+  async function loadInvitePanel() {
+    setInvitePanelOpen(true);
+    setInviteListLoading(true);
+    setInviteStatus(null);
+    try {
+      const nextInvites = await listInvites();
+      setInviteList(nextInvites);
+      setInviteStatus(null);
+    } catch (err) {
+      setInviteStatus({
+        tone: "error",
+        title: "Could not load invite codes",
+        detail: err?.message || "Try again in a moment.",
+      });
+    } finally {
+      setInviteListLoading(false);
+    }
+  }
+
   function closeModal() { setModal(null); setAddTradeOpen(false); setTradeForm(emptyTrade()); }
 
   const isBackendId = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id ?? ""));
@@ -739,6 +807,36 @@ export default function App() {
     setSessions(prev => prev.map(s => s.date !== modal.date ? s : {
       ...s, tradeList: (s.tradeList || []).filter(t => t.id !== id)
     }));
+  }
+
+  async function deleteOpenTrade(position) {
+    if (!position) return;
+    const positionId = position.positionId || "";
+    setOpenTradeDeleteBusyId(positionId);
+    try {
+      if (!isLocalMode && authUser && isBackendId(position.id)) {
+        try { await deletePaperTradesByIds([position.id]); } catch { /* non-fatal */ }
+        lastSyncedTradeKey.current = "";
+      }
+      setOpenTrades(prev => prev.filter(item => item.id !== position.id && item.positionId !== position.positionId));
+      const nextExtensionOpenPositions = Object.fromEntries(
+        Object.entries(extensionOpenPositions || {}).filter(([, value]) => {
+          if (!value) return false;
+          if (value.positionId && position.positionId && value.positionId === position.positionId) return false;
+          const sameContract = value.contractAddress && position.contractAddress && value.contractAddress === position.contractAddress;
+          const sameTokenFallback = !position.contractAddress && !value.contractAddress && value.tokenName === position.tokenName;
+          return !(sameContract || sameTokenFallback);
+        })
+      );
+      syncExtensionOpenPositions(nextExtensionOpenPositions);
+      showTransientMessage("live-positions-status", setLivePositionsStatus, {
+        tone: "success",
+        title: "Live positions updated",
+        detail: `${position.tokenName} was removed from the dashboard view.`,
+      });
+    } finally {
+      setOpenTradeDeleteBusyId("");
+    }
   }
 
   // ── Style primitives ───────────────────────────────────────────────────────
@@ -874,19 +972,48 @@ export default function App() {
   const sectionPad = isDesktop ? 16 : 16;
   const cardPad = 10;
   const modalPad = 20;
-
-  const syncInfo = {
-    loading: { col: accent, label: "Loading..." },
-    saving:  { col: accent, label: "Saving..." },
-    ok:      { col: green,  label: "Synced" },
-    local:   { col: green,  label: "Saved locally" },
-    setup:   { col: accent, label: "Setup needed" },
-    error:   { col: red,    label: "Sync issue" },
-  }[syncStatus] ?? { col: accent, label: "..." };
+  const uiPalette = {
+    neutral: {
+      bg: dark ? "rgba(255,255,255,0.03)" : "rgba(31,35,40,0.035)",
+      border: dark ? "rgba(255,255,255,0.07)" : "rgba(31,35,40,0.08)",
+      text: tk.textMid,
+      strongText: tk.text,
+    },
+    accent: {
+      bg: dark ? "rgba(245,158,11,0.09)" : "rgba(245,158,11,0.08)",
+      border: dark ? "rgba(245,158,11,0.22)" : "rgba(217,119,6,0.18)",
+      text: accent,
+      strongText: tk.text,
+    },
+    success: {
+      bg: dark ? "rgba(34,197,94,0.09)" : "rgba(34,197,94,0.08)",
+      border: dark ? "rgba(34,197,94,0.22)" : "rgba(21,128,61,0.16)",
+      text: green,
+      strongText: tk.text,
+    },
+    error: {
+      bg: dark ? "rgba(239,68,68,0.08)" : "rgba(239,68,68,0.07)",
+      border: dark ? "rgba(239,68,68,0.18)" : "rgba(185,28,28,0.14)",
+      text: red,
+      strongText: tk.text,
+    },
+  };
+  const syncInfo = getSyncPresentation(syncStatus);
+  const syncToneColor = syncInfo.tone === "success" ? green : syncInfo.tone === "error" ? red : accent;
+  const inviteListState = getCollectionUiState({ loading: inviteListLoading, items: inviteList });
+  const livePositionsState = openTrades.length > 0
+    ? UI_STATE.IDLE
+    : (!isLocalMode && authUser && syncStatus === "loading" ? UI_STATE.LOADING : UI_STATE.EMPTY);
   const syncBadge = (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, paddingLeft: 4 }}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: syncInfo.col, flexShrink: 0 }} />
-      <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", lineHeight: 1 }}>{syncInfo.label}</span>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, paddingLeft: 4 }}>
+      {(syncInfo.state === UI_STATE.LOADING || syncInfo.state === UI_STATE.SAVING) ? (
+        <InlineLoader label={syncInfo.label} tone="accent" />
+      ) : (
+        <>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: syncToneColor, flexShrink: 0, boxShadow: syncFlash ? `0 0 0 5px ${syncToneColor}22` : "none", transition: "box-shadow 180ms ease" }} />
+          <span style={{ fontSize: 11, color: tk.textDim, whiteSpace: "nowrap", lineHeight: 1 }}>{syncFlash || syncInfo.label}</span>
+        </>
+      )}
     </div>
   );
   const calendarSectionBg = dark ? "rgba(255,255,255,0.015)" : "rgba(31,35,40,0.02)";
@@ -922,12 +1049,15 @@ export default function App() {
   // Group completed trades by instrument — multiple buys/partial-sells on the same token = one position row
   const displayTradeGroups = (() => {
     const groups = {};
+    const keyOrder = [];
     completedModalTrades.forEach(t => {
-      const key = t.instrument || "—";
-      if (!groups[key]) groups[key] = [];
+      // Group by positionId when available so re-entries on the same coin are separate rows.
+      // Fall back to instrument+id so each unknown trade is its own row rather than all merged.
+      const key = t.positionId || `${t.instrument || "—"}_${t.id}`;
+      if (!groups[key]) { groups[key] = []; keyOrder.push(key); }
       groups[key].push(t);
     });
-    return Object.values(groups).map(trades => {
+    return keyOrder.map(key => { const trades = groups[key];
       const totalPnl  = trades.reduce((s, t) => s + parseFloat(t.pnl || 0), 0);
       const totalNet  = trades.reduce((s, t) => s + tradeNet(t), 0);
       const allViols  = trades.flatMap(t => checkTrade(t));
@@ -1096,12 +1226,19 @@ export default function App() {
               <label style={{ fontSize: 10, color: `${accent}77`, textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 4 }}>Notes</label>
               <input placeholder="Setup..." value={tradeForm.notes} onChange={e => setTradeForm(p => ({ ...p, notes: e.target.value }))} style={{ ...inp, fontSize: 12, padding: "8px 10px" }} />
             </div>
-            <button onClick={addTradeToSession} style={{ width: "100%", padding: "11px", fontSize: 13, fontWeight: 700, borderRadius: 999, border: `1px solid ${accent}44`, background: "rgba(16,163,127,0.10)", color: accent, cursor: "pointer", fontFamily: sans }}>Save trade</button>
+            <button className="ui-interactive-button" onClick={addTradeToSession} style={{ width: "100%", padding: "11px", fontSize: 13, fontWeight: 700, borderRadius: 999, border: `1px solid ${accent}44`, background: "rgba(16,163,127,0.10)", color: accent, cursor: "pointer", fontFamily: sans }}>Save trade</button>
           </div>
         )}
 
         {!modalTrades.length && !addTradeOpen && (
-          <div style={{ ...quietPanel, textAlign: "center", color: tk.textDim, fontSize: 13, padding: "22px 0" }}>No trades yet</div>
+          <EmptyState
+            compact
+            align="center"
+            eyebrow="Session detail"
+            title="No closed trades yet"
+            detail="This session does not have any completed trade entries to review."
+            palette={uiPalette}
+          />
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1120,7 +1257,12 @@ export default function App() {
                       {closeMeta?.trigger && closeMeta.trigger !== "manual" && <span style={{ fontSize: 10, color: green, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{closeMeta.trigger.replaceAll("_", " ")}</span>}
                       {allViols.length > 0 && <span style={{ fontSize: 10, color: accentDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Violation</span>}
                     </div>
-                    {firstEntryMC > 0 && <div style={{ marginTop: 10, fontSize: 11, color: tk.textDim }}>MC ${firstEntryMC.toLocaleString()} → ${lastExitMC.toLocaleString()}</div>}
+                    {firstEntryMC > 0 && <div style={{ marginTop: 10, fontSize: 11, color: tk.textDim }}>
+                      {(() => {
+                        const fmtMC = v => v >= 1e6 ? `$${(v/1e6).toFixed(1)}M` : v >= 1e3 ? `$${(v/1e3).toFixed(1)}K` : `$${v.toFixed(1)}`;
+                        return `MC ${fmtMC(firstEntryMC)} → ${fmtMC(lastExitMC)}`;
+                      })()}
+                    </div>}
                     {notes && <div style={{ marginTop: 8, fontSize: 12, color: tk.textMid, lineHeight: 1.55 }}>{notes}</div>}
                     {allViols.map((v, j) => <div key={j} style={{ fontSize: 11, color: `${accent}77`, marginTop: 6, lineHeight: 1.5 }}>{v.rule}: {v.detail}</div>)}
                   </div>
@@ -1130,6 +1272,7 @@ export default function App() {
                       {avgPct !== null && <div style={{ fontSize: 11, color: fmtColor(avgPct), marginTop: 4 }}>{fmtPct(avgPct)}</div>}
                     </div>
                     <button
+                      className="ui-interactive-button"
                       onClick={async () => { for (const t of trades) await deleteTrade(t.id); }}
                       style={{ background: tk.surface3, border: "none", borderRadius: 999, cursor: "pointer", color: tk.textDim, fontSize: 12, width: 28, height: 28, display: "grid", placeItems: "center", fontFamily: sans, flexShrink: 0 }}
                     >✕</button>
@@ -1153,6 +1296,7 @@ export default function App() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginLeft: "auto" }}>
           {currencyToggle}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button
             className="clickable-text"
             onClick={() => setCurrentMonth(p => { const d = new Date(p.y, p.m - 1); return { y: d.getFullYear(), m: d.getMonth() }; })}
@@ -1187,6 +1331,7 @@ export default function App() {
             ›
           </button>
         </div>
+        </div>
       </div>
 
       {monthSessions.length > 0 && (
@@ -1206,10 +1351,12 @@ export default function App() {
 
       {sessions.length === 0 && (
         <div style={{ marginBottom: 18, padding: isDesktop ? "6px 0 2px" : "4px 0 2px", flexShrink: 0 }}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: tk.text, lineHeight: 1.1 }}>No data yet</div>
-          <div style={{ marginTop: 8, fontSize: 12, color: tk.textMid, lineHeight: 1.6, maxWidth: 520 }}>
-            Import your first session to start tracking P/L, rule adherence, and consistency.
-          </div>
+          <EmptyState
+            eyebrow="Getting started"
+            title="No trading record yet"
+            detail="Import your first session to populate the calendar, unlock readiness tracking, and surface your next practice focus."
+            palette={uiPalette}
+          />
         </div>
       )}
 
@@ -1372,65 +1519,75 @@ export default function App() {
   const insightRail = (
     <aside style={{ display: "flex", flexDirection: "column", gap: 0, height: isDesktop ? "100%" : "auto", overflowY: isDesktop ? "auto" : "visible", paddingRight: isDesktop ? 0 : 0, borderLeft: isDesktop ? `1px solid ${tk.border}` : "none", background: railSectionBg }}>
 
-      {(openTrades.length > 0 || normalizedExtensionOpenTrades.length > 0) && (
+      {openTrades.length > 0 && (
         <div style={{ padding: sectionPad, borderBottom: `1px solid ${tk.borderSub}` }}>
-          <div style={{ ...labelStyle, marginBottom: 8 }}>Live positions</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {openTrades.map(pos => {
-              const entryMC = pos.entryMarketCap;
-              const sizeSol = pos.positionSizeSol;
-              const sizeUsd = solPrice ? sizeSol * solPrice : null;
-              const events = Array.isArray(pos.events) ? [...pos.events].sort((a, b) => Number(b.at || 0) - Number(a.at || 0)) : [];
-              const entryCapture = pos.entryCapture || null;
-              const lastCapture = pos.lastCapture || null;
-              return (
-                <div key={pos.positionId} style={{ ...quietPanel, padding: cardPad }}>
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>{pos.tokenName}</div>
-                      <div style={{ fontSize: 11, color: tk.textDim, marginTop: 2 }}>
-                        entry {formatAuditMc(entryMC)}
+            <div style={{ ...labelStyle, marginBottom: 8 }}>Live positions</div>
+            {livePositionsStatus && (
+              <div style={{ marginBottom: 10 }}>
+                <StatusNotice {...livePositionsStatus} palette={uiPalette} compact />
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {openTrades.map(pos => {
+                const entryMC = pos.entryMarketCap;
+                const sizeSol = pos.positionSizeSol;
+                const sizeUsd = solPrice ? sizeSol * solPrice : null;
+                const livePositionValue = calendarUnit === "sol" || sizeUsd === null
+                  ? `${sizeSol.toFixed(3)} SOL`
+                  : `$${sizeUsd.toFixed(2)}`;
+                const deleteBusy = openTradeDeleteBusyId === pos.positionId;
+                return (
+                  <div key={pos.positionId} className="ui-card-reveal" style={{ ...quietPanel, padding: cardPad, cursor: pos.pageUrl ? "pointer" : "default", animationDelay: `${Math.min(openTrades.indexOf(pos), 5) * 28}ms` }}
+                    onClick={() => pos.pageUrl && window.open(pos.pageUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>{pos.tokenName}</span>
+                          {pos.tokenFullName && <span style={{ fontSize: 11, color: tk.textDim }}>{pos.tokenFullName}</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: tk.textDim, marginTop: 2 }}>
+                          entry {formatAuditMc(entryMC)}
+                        </div>
+                        {pos.contractAddress && (
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(pos.contractAddress); }}
+                            style={{ marginTop: 4, background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 10, color: tk.textDim, fontFamily: sans, letterSpacing: "0.01em", display: "flex", alignItems: "center", gap: 4 }}
+                          >
+                            <span style={{ fontFamily: "monospace", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }}>{pos.contractAddress}</span>
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: tk.textMid, whiteSpace: "nowrap" }}>
+                        {livePositionValue}
                       </div>
                     </div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: tk.textMid, whiteSpace: "nowrap" }}>
-                      {sizeUsd !== null ? `$${sizeUsd.toFixed(2)}` : `${sizeSol.toFixed(3)} SOL`}
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); void deleteOpenTrade(pos); }}
+                        disabled={deleteBusy}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          padding: 0,
+                          margin: 0,
+                          color: deleteBusy ? tk.textDim : red,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: deleteBusy ? "default" : "pointer",
+                        }}
+                      >
+                        {deleteBusy ? "Deleting..." : "Delete trade"}
+                      </button>
                     </div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 10 }}>
-                    <div style={{ ...quietPanel, padding: cardPad }}>
-                      <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Capture</div>
-                      <div style={{ fontSize: 11, color: tk.text, lineHeight: 1.45 }}>{entryCapture?.marketCapSource || pos.marketCapSource || "unknown"}</div>
-                      <div style={{ fontSize: 10, color: tk.textDim, marginTop: 4 }}>{formatTimelineTime(entryCapture?.capturedAt || pos.openedAt)}</div>
-                    </div>
-                    <div style={{ ...quietPanel, padding: cardPad }}>
-                      <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Protection</div>
-                      <div style={{ fontSize: 11, color: tk.text, lineHeight: 1.45 }}>
-                        SL {pos.stopLossPct ? `${Math.abs(pos.stopLossPct).toFixed(1)}%` : "—"} · TP {pos.targetSellPct ? `${pos.targetSellPct.toFixed(1)}%` : "—"}
-                      </div>
-                    </div>
-                  </div>
-                  {lastCapture?.marketCapText && (
-                    <div style={{ marginTop: 6, fontSize: 11, color: tk.textMid, lineHeight: 1.5 }}>
-                      Saw on page: {lastCapture.marketCapText}
-                    </div>
-                  )}
-                  {events.length > 0 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div style={{ fontSize: 9, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Activity</div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                        {events.slice(0, 5).map(event => (
-                          <div key={event.id || `${event.type}_${event.at}`} style={{ fontSize: 11, color: tk.textMid, lineHeight: 1.5 }}>
-                            {formatTimelineTime(event.at)} · {event.type.replaceAll("_", " ")} · {formatAuditMc(event.marketCap)}{event.sizeSol ? ` · ${Number(event.sizeSol).toFixed(3)} SOL` : ""}{event.trigger && event.trigger !== "manual" ? ` · ${event.trigger}` : ""}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
       )}
 
       <div style={{
@@ -1628,7 +1785,7 @@ export default function App() {
   const switchMode = (mode) => { setAuthMode(mode); setAuthError(""); setAuthNotice(""); };
 
   const authScreen = (
-    <div style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: sans, display: "grid", placeItems: "center", padding: 20 }}>
+    <div className="ui-page-enter" style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: sans, display: "grid", placeItems: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 400 }}>
 
         <div style={{ textAlign: "center", marginBottom: 28 }}>
@@ -1641,7 +1798,7 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ ...panel, padding: `${modalPad + 4}px ${modalPad + 2}px`, borderRadius: 14 }}>
+        <div className="ui-panel-pop" style={{ ...panel, padding: `${modalPad + 4}px ${modalPad + 2}px`, borderRadius: 16, boxShadow: dark ? "0 18px 40px rgba(0,0,0,0.18)" : "0 20px 40px rgba(31,35,40,0.08)" }}>
           {!hasSupabaseConfig ? (
             <>
               <div style={{ fontSize: 15, fontWeight: 700, color: tk.text, marginBottom: 8 }}>Connect Supabase</div>
@@ -1653,9 +1810,44 @@ export default function App() {
               </div>
             </>
           ) : !authReady ? (
-            <div style={{ fontSize: 13, color: tk.textMid, textAlign: "center", padding: "8px 0" }}>Loading...</div>
+            <div style={{ padding: "10px 0 6px" }}>
+              <InlineLoader label="Preparing account access" tone="accent" align="center" />
+              <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+                <div className="ui-skeleton" style={{ height: 14, borderRadius: 999, opacity: 0.75 }} />
+                <div className="ui-skeleton" style={{ height: 42, borderRadius: 10 }} />
+                <div className="ui-skeleton" style={{ height: 42, borderRadius: 10 }} />
+                <div className="ui-skeleton" style={{ height: 44, borderRadius: 999, opacity: 0.82 }} />
+              </div>
+            </div>
           ) : (
             <>
+              {(authMode === "sign-in" || authMode === "sign-up") && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+                  {[
+                    ["sign-up", "Create account"],
+                    ["sign-in", "Sign in"],
+                  ].map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className="ui-interactive-button"
+                      onClick={() => switchMode(mode)}
+                      style={{
+                        ...actionButton,
+                        borderRadius: 999,
+                        padding: "9px 12px",
+                        background: authMode === mode ? (dark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.05)") : "transparent",
+                        borderColor: authMode === mode ? tk.border : tk.borderSub,
+                        color: authMode === mode ? tk.text : tk.textDim,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <form onSubmit={handleAuthSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 {authMode === "sign-up" && (
                   <>
@@ -1666,7 +1858,7 @@ export default function App() {
                         onChange={e => setAuthForm(prev => ({ ...prev, inviteCode: e.target.value.toUpperCase() }))}
                         placeholder="XXXXXXXX"
                         autoFocus
-                        style={{ ...inp, fontFamily: "monospace", letterSpacing: "0.1em" }}
+                        style={{ ...inp, fontFamily: "monospace", letterSpacing: "0.1em", borderRadius: 10 }}
                       />
                     </div>
                     <div>
@@ -1675,7 +1867,7 @@ export default function App() {
                         value={authForm.fullName}
                         onChange={e => setAuthForm(prev => ({ ...prev, fullName: e.target.value }))}
                         placeholder="Your name"
-                        style={inp}
+                        style={{ ...inp, borderRadius: 10 }}
                       />
                     </div>
                   </>
@@ -1689,7 +1881,7 @@ export default function App() {
                       onChange={e => setAuthForm(prev => ({ ...prev, email: e.target.value }))}
                       placeholder="you@example.com"
                       autoFocus={authMode === "sign-in"}
-                      style={inp}
+                      style={{ ...inp, borderRadius: 10 }}
                     />
                   </div>
                 )}
@@ -1701,7 +1893,7 @@ export default function App() {
                       value={authForm.password}
                       onChange={e => setAuthForm(prev => ({ ...prev, password: e.target.value }))}
                       placeholder="Minimum 6 characters"
-                      style={inp}
+                      style={{ ...inp, borderRadius: 10 }}
                     />
                   </div>
                 )}
@@ -1713,16 +1905,33 @@ export default function App() {
                       value={authForm.confirmPassword}
                       onChange={e => setAuthForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
                       placeholder="Repeat your new password"
-                      style={inp}
+                      style={{ ...inp, borderRadius: 10 }}
                     />
                   </div>
                 )}
 
-                {authError && <div style={{ fontSize: 13, color: red, marginTop: -4 }}>{authError}</div>}
-                {authNotice && <div style={{ fontSize: 13, color: green, lineHeight: 1.6, marginTop: -4 }}>{authNotice}</div>}
+                {authError && (
+                  <StatusNotice
+                    tone="error"
+                    title="Authentication issue"
+                    detail={authError}
+                    palette={uiPalette}
+                    compact
+                  />
+                )}
+                {authNotice && (
+                  <StatusNotice
+                    tone="success"
+                    title="Account update"
+                    detail={authNotice}
+                    palette={uiPalette}
+                    compact
+                  />
+                )}
 
                 <button
                   type="submit"
+                  className="ui-interactive-button"
                   disabled={
                     authBusy
                     || (authMode !== "forgot-password" && authMode !== "reset-password" && !authForm.email.trim())
@@ -1740,29 +1949,43 @@ export default function App() {
                     fontWeight: 600,
                     fontSize: 14,
                     marginTop: 2,
+                    minHeight: 44,
+                    boxShadow: authBusy ? "none" : (dark ? "0 8px 18px rgba(0,0,0,0.14)" : "0 8px 18px rgba(31,35,40,0.06)"),
                   }}
                 >
-                  {authBusy ? "Working..." : authMode === "sign-up" ? "Create account" : authMode === "forgot-password" ? "Send reset email" : authMode === "reset-password" ? "Update password" : "Sign in"}
+                  {authBusy ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <span className="ui-inline-loader-dots" aria-hidden="true"><span /><span /><span /></span>
+                      <span>{authMode === "forgot-password" ? "Sending reset email" : authMode === "reset-password" ? "Updating password" : "Working"}</span>
+                    </span>
+                  ) : authMode === "sign-up" ? "Create account" : authMode === "forgot-password" ? "Send reset email" : authMode === "reset-password" ? "Update password" : "Sign in"}
                 </button>
               </form>
 
               <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${tk.borderSub}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                {(authMode === "sign-up" || authMode === "sign-in") && (
+                {authMode === "sign-in" && (
                   <span style={{ fontSize: 13, color: tk.textDim }}>
-                    {authMode === "sign-up" ? "Already have an account?" : "Don't have an account?"}
-                    {" "}
-                    <button onClick={() => switchMode(authMode === "sign-up" ? "sign-in" : "sign-up")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textMid, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3, fontFamily: sans }}>
-                      {authMode === "sign-up" ? "Sign in" : "Sign up"}
+                    Need a new account?{" "}
+                    <button type="button" onClick={() => switchMode("sign-up")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textMid, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3, fontFamily: sans }}>
+                      Create one
+                    </button>
+                  </span>
+                )}
+                {authMode === "sign-up" && (
+                  <span style={{ fontSize: 13, color: tk.textDim }}>
+                    Already set up?{" "}
+                    <button type="button" onClick={() => switchMode("sign-in")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textMid, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3, fontFamily: sans }}>
+                      Sign in
                     </button>
                   </span>
                 )}
                 {authMode === "sign-in" && (
-                  <button onClick={() => switchMode("forgot-password")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textDim, cursor: "pointer", fontFamily: sans }}>
+                  <button type="button" onClick={() => switchMode("forgot-password")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textDim, cursor: "pointer", fontFamily: sans }}>
                     Forgot password?
                   </button>
                 )}
                 {(authMode === "forgot-password" || authMode === "reset-password") && (
-                  <button onClick={() => switchMode("sign-in")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textDim, cursor: "pointer", fontFamily: sans }}>
+                  <button type="button" onClick={() => switchMode("sign-in")} style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: tk.textDim, cursor: "pointer", fontFamily: sans }}>
                     ← Back to sign in
                   </button>
                 )}
@@ -1787,7 +2010,7 @@ export default function App() {
           {modal.instrument && <div style={{ fontSize: 12, color: tk.textDim, marginTop: 5 }}>{modal.instrument}</div>}
         </div>
         <div style={{ display: "flex", gap: 7 }}>
-          <button onClick={deleteSession} style={{ ...actionButton, background: dark ? "rgba(214,69,69,0.08)" : "rgba(214,69,69,0.06)", border: "1px solid rgba(214,69,69,0.18)", fontSize: 13, color: red, padding: "7px 14px", borderRadius: 999 }}>Delete</button>
+          <button className="ui-interactive-button" onClick={deleteSession} style={{ ...actionButton, background: dark ? "rgba(214,69,69,0.08)" : "rgba(214,69,69,0.06)", border: "1px solid rgba(214,69,69,0.18)", fontSize: 13, color: red, padding: "7px 14px", borderRadius: 999 }}>Delete</button>
         </div>
       </div>
     </div>
@@ -1795,7 +2018,7 @@ export default function App() {
 
   // ── Settings panel ────────────────────────────────────────────────────────
   const settingsPanel = settingsPanelOpen && (
-    <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 216, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div className="ui-panel-pop" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 216, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
         <div style={{ display: "flex", gap: 7 }}>
@@ -1804,11 +2027,20 @@ export default function App() {
           ))}
         </div>
       </div>
+      {authUser && (
+        <div style={{ borderTop: `1px solid ${tk.border}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+          <button className="ui-interactive-button" onClick={async () => { await signOutUser(); setSettingsPanelOpen(false); }} style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, color: tk.textMid, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Sign out</button>
+          <button onClick={async () => {
+            if (!window.confirm("Delete your account? This cannot be undone.")) return;
+            try { await deleteCurrentUser(); } catch { window.alert("Couldn't delete account — contact support."); }
+          }} className="ui-interactive-button" style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, color: red, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Delete account</button>
+        </div>
+      )}
     </div>
   );
   const settingsIconBtn = (
     <div ref={settingsWrapperRef} style={{ position: "relative" }}>
-      <button onClick={() => setSettingsPanelOpen(v => !v)} aria-label="Settings" style={{ ...headerButton, padding: "5px 7px", color: settingsPanelOpen ? accent : tk.textDim, display: "flex", alignItems: "center" }}>
+      <button className="ui-interactive-button" onClick={() => setSettingsPanelOpen(v => !v)} aria-label="Settings" style={{ ...headerButton, padding: "5px 7px", color: settingsPanelOpen ? accent : tk.textDim, display: "flex", alignItems: "center" }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path fillRule="evenodd" clipRule="evenodd" d="M12 8.25C9.92894 8.25 8.25 9.92893 8.25 12C8.25 14.0711 9.92894 15.75 12 15.75C14.0711 15.75 15.75 14.0711 15.75 12C15.75 9.92893 14.0711 8.25 12 8.25ZM9.75 12C9.75 10.7574 10.7574 9.75 12 9.75C13.2426 9.75 14.25 10.7574 14.25 12C14.25 13.2426 13.2426 14.25 12 14.25C10.7574 14.25 9.75 13.2426 9.75 12Z" fill="currentColor"/>
           <path fillRule="evenodd" clipRule="evenodd" d="M11.9747 1.25C11.5303 1.24999 11.1592 1.24999 10.8546 1.27077C10.5375 1.29241 10.238 1.33905 9.94761 1.45933C9.27379 1.73844 8.73843 2.27379 8.45932 2.94762C8.31402 3.29842 8.27467 3.66812 8.25964 4.06996C8.24756 4.39299 8.08454 4.66251 7.84395 4.80141C7.60337 4.94031 7.28845 4.94673 7.00266 4.79568C6.64714 4.60777 6.30729 4.45699 5.93083 4.40743C5.20773 4.31223 4.47642 4.50819 3.89779 4.95219C3.64843 5.14353 3.45827 5.3796 3.28099 5.6434C3.11068 5.89681 2.92517 6.21815 2.70294 6.60307L2.67769 6.64681C2.45545 7.03172 2.26993 7.35304 2.13562 7.62723C1.99581 7.91267 1.88644 8.19539 1.84541 8.50701C1.75021 9.23012 1.94617 9.96142 2.39016 10.5401C2.62128 10.8412 2.92173 11.0602 3.26217 11.2741C3.53595 11.4461 3.68788 11.7221 3.68786 12C3.68785 12.2778 3.53592 12.5538 3.26217 12.7258C2.92169 12.9397 2.62121 13.1587 2.39007 13.4599C1.94607 14.0385 1.75012 14.7698 1.84531 15.4929C1.88634 15.8045 1.99571 16.0873 2.13552 16.3727C2.26983 16.6469 2.45535 16.9682 2.67758 17.3531L2.70284 17.3969C2.92507 17.7818 3.11058 18.1031 3.28089 18.3565C3.45817 18.6203 3.64833 18.8564 3.89769 19.0477C4.47632 19.4917 5.20763 19.6877 5.93073 19.5925C6.30717 19.5429 6.647 19.3922 7.0025 19.2043C7.28833 19.0532 7.60329 19.0596 7.8439 19.1986C8.08452 19.3375 8.24756 19.607 8.25964 19.9301C8.27467 20.3319 8.31403 20.7016 8.45932 21.0524C8.73843 21.7262 9.27379 22.2616 9.94761 22.5407C10.238 22.661 10.5375 22.7076 10.8546 22.7292C11.1592 22.75 11.5303 22.75 11.9747 22.75H12.0252C12.4697 22.75 12.8407 22.75 13.1454 22.7292C13.4625 22.7076 13.762 22.661 14.0524 22.5407C14.7262 22.2616 15.2616 21.7262 15.5407 21.0524C15.686 20.7016 15.7253 20.3319 15.7403 19.93C15.7524 19.607 15.9154 19.3375 16.156 19.1985C16.3966 19.0596 16.7116 19.0532 16.9974 19.2042C17.3529 19.3921 17.6927 19.5429 18.0692 19.5924C18.7923 19.6876 19.5236 19.4917 20.1022 19.0477C20.3516 18.8563 20.5417 18.6203 20.719 18.3565C20.8893 18.1031 21.0748 17.7818 21.297 17.3969L21.3223 17.3531C21.5445 16.9682 21.7301 16.6468 21.8644 16.3726C22.0042 16.0872 22.1135 15.8045 22.1546 15.4929C22.2498 14.7697 22.0538 14.0384 21.6098 13.4598C21.3787 13.1586 21.0782 12.9397 20.7378 12.7258C20.464 12.5538 20.3121 12.2778 20.3121 11.9999C20.3121 11.7221 20.464 11.4462 20.7377 11.2742C21.0783 11.0603 21.3788 10.8414 21.6099 10.5401C22.0539 9.96149 22.2499 9.23019 22.1547 8.50708C22.1136 8.19546 22.0043 7.91274 21.8645 7.6273C21.7302 7.35313 21.5447 7.03183 21.3224 6.64695L21.2972 6.60318C21.0749 6.21825 20.8894 5.89688 20.7191 5.64347C20.5418 5.37967 20.3517 5.1436 20.1023 4.95225C19.5237 4.50826 18.7924 4.3123 18.0692 4.4075C17.6928 4.45706 17.353 4.60782 16.9975 4.79572C16.7117 4.94679 16.3967 4.94036 16.1561 4.80144C15.9155 4.66253 15.7524 4.39297 15.7403 4.06991C15.7253 3.66808 15.686 3.2984 15.5407 2.94762C15.2616 2.27379 14.7262 1.73844 14.0524 1.45933C13.762 1.33905 13.4625 1.29241 13.1454 1.27077C12.8407 1.24999 12.4697 1.24999 12.0252 1.25H11.9747ZM10.5216 2.84515C10.5988 2.81319 10.716 2.78372 10.9567 2.76729C11.2042 2.75041 11.5238 2.75 12 2.75C12.4762 2.75 12.7958 2.75041 13.0432 2.76729C13.284 2.78372 13.4012 2.81319 13.4783 2.84515C13.7846 2.97202 14.028 3.21536 14.1548 3.52165C14.1949 3.61826 14.228 3.76887 14.2414 4.12597C14.271 4.91835 14.68 5.68129 15.4061 6.10048C16.1321 6.51968 16.9974 6.4924 17.6984 6.12188C18.0143 5.9549 18.1614 5.90832 18.265 5.89467C18.5937 5.8514 18.9261 5.94047 19.1891 6.14228C19.2554 6.19312 19.3395 6.27989 19.4741 6.48016C19.6125 6.68603 19.7726 6.9626 20.0107 7.375C20.2488 7.78741 20.4083 8.06438 20.5174 8.28713C20.6235 8.50382 20.6566 8.62007 20.6675 8.70287C20.7108 9.03155 20.6217 9.36397 20.4199 9.62698C20.3562 9.70995 20.2424 9.81399 19.9397 10.0041C19.2684 10.426 18.8122 11.1616 18.8121 11.9999C18.8121 12.8383 19.2683 13.574 19.9397 13.9959C20.2423 14.186 20.3561 14.29 20.4198 14.373C20.6216 14.636 20.7107 14.9684 20.6674 15.2971C20.6565 15.3799 20.6234 15.4961 20.5173 15.7128C20.4082 15.9355 20.2487 16.2125 20.0106 16.6249C19.7725 17.0373 19.6124 17.3139 19.474 17.5198C19.3394 17.72 19.2553 17.8068 19.189 17.8576C18.926 18.0595 18.5936 18.1485 18.2649 18.1053C18.1613 18.0916 18.0142 18.045 17.6983 17.8781C16.9973 17.5075 16.132 17.4803 15.4059 17.8995C14.68 18.3187 14.271 19.0816 14.2414 19.874C14.228 20.2311 14.1949 20.3817 14.1548 20.4784C14.028 20.7846 13.7846 21.028 13.4783 21.1549C13.4012 21.1868 13.284 21.2163 13.0432 21.2327C12.7958 21.2496 12.4762 21.25 12 21.25C11.5238 21.25 11.2042 21.2496 10.9567 21.2327C10.716 21.2163 10.5988 21.1868 10.5216 21.1549C10.2154 21.028 9.97201 20.7846 9.84514 20.4784C9.80512 20.3817 9.77195 20.2311 9.75859 19.874C9.72896 19.0817 9.31997 18.3187 8.5939 17.8995C7.86784 17.4803 7.00262 17.5076 6.30158 17.8781C5.98565 18.0451 5.83863 18.0917 5.73495 18.1053C5.40626 18.1486 5.07385 18.0595 4.81084 17.8577C4.74458 17.8069 4.66045 17.7201 4.52586 17.5198C4.38751 17.314 4.22736 17.0374 3.98926 16.625C3.75115 16.2126 3.59171 15.9356 3.4826 15.7129C3.37646 15.4962 3.34338 15.3799 3.33248 15.2971C3.28921 14.9684 3.37828 14.636 3.5801 14.373C3.64376 14.2901 3.75761 14.186 4.0602 13.9959C4.73158 13.5741 5.18782 12.8384 5.18786 12.0001C5.18791 11.1616 4.73165 10.4259 4.06021 10.004C3.75769 9.81389 3.64385 9.70987 3.58019 9.62691C3.37838 9.3639 3.28931 9.03149 3.33258 8.7028C3.34348 8.62001 3.37656 8.50375 3.4827 8.28707C3.59181 8.06431 3.75125 7.78734 3.98935 7.37493C4.22746 6.96253 4.3876 6.68596 4.52596 6.48009C4.66055 6.27983 4.74468 6.19305 4.81093 6.14222C5.07395 5.9404 5.40636 5.85133 5.73504 5.8946C5.83873 5.90825 5.98576 5.95483 6.30173 6.12184C7.00273 6.49235 7.86791 6.51962 8.59394 6.10045C9.31998 5.68128 9.72896 4.91837 9.75859 4.12602C9.77195 3.76889 9.80512 3.61827 9.84514 3.52165C9.97201 3.21536 10.2154 2.97202 10.5216 2.84515Z" fill="currentColor"/>
@@ -1869,6 +2101,7 @@ export default function App() {
       }}
     >
       <div
+        className="ui-panel-pop"
         onClick={e => e.stopPropagation()}
         style={{
           ...panel,
@@ -1886,7 +2119,7 @@ export default function App() {
             <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 7 }}>Portfolio balance</div>
             <div style={{ fontSize: 24, fontWeight: 800, color: tk.text, lineHeight: 1 }}>{virtualBalance.toFixed(2)} SOL</div>
           </div>
-          <button onClick={() => setBalanceModalOpen(false)} style={{ ...headerButton, padding: "6px 8px", color: tk.textMid }}>Close</button>
+          <button className="ui-interactive-button" onClick={() => setBalanceModalOpen(false)} style={{ ...headerButton, padding: "6px 8px", color: tk.textMid }}>Close</button>
         </div>
         <div style={{ fontSize: 12, color: tk.textMid, lineHeight: 1.6, marginBottom: 14 }}>
           Add SOL to your paper portfolio and keep it synced with the extension balance.
@@ -1913,6 +2146,7 @@ export default function App() {
             style={{ flex: 1, background: tk.inp.bg, border: `1px solid ${tk.inp.border}`, color: tk.inp.color, borderRadius: 8, padding: "10px 12px", fontSize: 13, fontFamily: sans, outline: "none", minWidth: 0 }}
           />
           <button
+            className="ui-interactive-button"
             onClick={() => {
               const v = Number(balanceInputVal);
               if (v > 0) {
@@ -1927,6 +2161,7 @@ export default function App() {
           </button>
         </div>
         <button
+          className="ui-interactive-button"
           onClick={() => {
             resetVirtualBalance();
             setBalanceInputVal("");
@@ -1948,7 +2183,7 @@ export default function App() {
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", height: "100%", alignItems: "stretch" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, padding: `0 ${sectionPad}px` }}>
               {headerPnl}
-              {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
+              {isAdmin && <button className="ui-interactive-button" onClick={() => { void loadInvitePanel(); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderLeft: `1px solid ${tk.border}`, padding: `0 ${sectionPad}px`, minWidth: 0 }}>
               {profileTrigger}
@@ -1959,7 +2194,7 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, height: "100%" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
               {headerPnl}
-              {isAdmin && <button onClick={() => { setInvitePanelOpen(true); setInviteListLoading(true); listInvites().then(setInviteList).finally(() => setInviteListLoading(false)); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
+              {isAdmin && <button className="ui-interactive-button" onClick={() => { void loadInvitePanel(); }} style={{ ...headerButton, fontSize: 12, padding: "4px 8px" }}>Invites</button>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minWidth: 0 }}>
               {profileTrigger}
@@ -2008,20 +2243,30 @@ export default function App() {
   // ── Invite panel ──────────────────────────────────────────────────────────
   const invitePanel = invitePanelOpen ? (
     <div onClick={() => setInvitePanelOpen(false)} style={{ position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.62)" : "rgba(31,35,40,0.28)", backdropFilter: "blur(8px)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: 16, width: "100%", maxWidth: 420, padding: modalPad, fontFamily: sans }}>
+      <div className="ui-panel-pop" onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: 16, width: "100%", maxWidth: 420, padding: modalPad, fontFamily: sans }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>Invite codes</span>
-          <button onClick={() => setInvitePanelOpen(false)} style={{ ...headerButton, color: tk.textMid }}>Close</button>
+          <button className="ui-interactive-button" onClick={() => setInvitePanelOpen(false)} style={{ ...headerButton, color: tk.textMid }}>Close</button>
         </div>
 
         <button
+          className="ui-interactive-button"
           onClick={async () => {
             setInviteGenBusy(true);
             try {
               const code = await generateInvite();
               setInviteList(prev => [{ code, created_at: new Date().toISOString(), used_at: null }, ...prev]);
+              setInviteStatus({
+                tone: "success",
+                title: "Invite generated",
+                detail: `${code} is ready to copy and share.`,
+              });
             } catch (err) {
-              alert(err?.message || "Failed to generate code.");
+              setInviteStatus({
+                tone: "error",
+                title: "Could not generate invite code",
+                detail: err?.message || "Try again in a moment.",
+              });
             } finally {
               setInviteGenBusy(false);
             }
@@ -2029,13 +2274,33 @@ export default function App() {
           disabled={inviteGenBusy}
           style={{ ...actionButton, width: "100%", padding: "10px 14px", borderRadius: 999, background: "rgba(16,163,127,0.10)", borderColor: `${accent}44`, color: accent, marginBottom: 16 }}
         >
-          {inviteGenBusy ? "Generating..." : "+ Generate invite code"}
+          {inviteGenBusy ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span className="ui-inline-loader-dots" aria-hidden="true"><span /><span /><span /></span>
+              <span>Generating code</span>
+            </span>
+          ) : "+ Generate invite code"}
         </button>
 
-        {inviteListLoading ? (
-          <div style={{ fontSize: 13, color: tk.textDim, textAlign: "center", padding: "12px 0" }}>Loading...</div>
-        ) : inviteList.length === 0 ? (
-          <div style={{ fontSize: 13, color: tk.textDim, textAlign: "center", padding: "12px 0" }}>No codes yet.</div>
+        {inviteStatus && (
+          <div style={{ marginBottom: 14 }}>
+            <StatusNotice {...inviteStatus} palette={uiPalette} compact />
+          </div>
+        )}
+
+        {inviteListState === UI_STATE.LOADING ? (
+          <div style={{ padding: "8px 0 4px" }}>
+            <InlineLoader label="Loading invite codes" tone="accent" />
+          </div>
+        ) : inviteListState === UI_STATE.EMPTY ? (
+          <EmptyState
+            compact
+            align="center"
+            eyebrow="Access"
+            title="No invite codes yet"
+            detail="Generate a code to share controlled access to the dashboard."
+            palette={uiPalette}
+          />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
             {inviteList.map(inv => {
@@ -2049,9 +2314,15 @@ export default function App() {
                   </div>
                   {!inv.used_at && (
                     <button
+                      className="ui-interactive-button"
                       onClick={() => {
                         navigator.clipboard.writeText(inviteUrl);
                         setInviteCopied(inv.code);
+                        setInviteStatus({
+                          tone: "success",
+                          title: "Invite link copied",
+                          detail: `${inv.code} is ready to send.`,
+                        });
                         setTimeout(() => setInviteCopied(""), 2000);
                       }}
                       style={{ ...headerButton, flexShrink: 0, color: copied ? green : tk.textMid }}
@@ -2073,7 +2344,7 @@ export default function App() {
   // ══════════════════════════════════════════════════════════════════════════
   if (isDesktop) {
     return (
-      <div style={{ background: tk.bg, color: tk.text, height: "100vh", overflow: "hidden", fontFamily: sans }}>
+      <div className="ui-page-enter" style={{ background: tk.bg, color: tk.text, height: "100vh", overflow: "hidden", fontFamily: sans }}>
         {desktopLeftDivider}
         {desktopRightDivider}
         {appHeader}
@@ -2110,7 +2381,7 @@ export default function App() {
   // MOBILE
   // ══════════════════════════════════════════════════════════════════════════
   return (
-    <div style={{ background: tk.bg, color: tk.text, minHeight: "100vh", fontFamily: sans }}>
+    <div className="ui-page-enter" style={{ background: tk.bg, color: tk.text, minHeight: "100vh", fontFamily: sans }}>
       {appHeader}
       <div style={{ padding: contentPad, maxWidth: 640, margin: "0 auto", background: tk.bg }}>
         {calendarContent}
@@ -2127,7 +2398,7 @@ export default function App() {
                   {modal.instrument && <div style={{ fontSize: 12, color: `${accent}66`, marginTop: 1 }}>{modal.instrument}</div>}
                 </div>
                 <div style={{ display: "flex", gap: 7 }}>
-                  <button onClick={deleteSession} style={{ ...actionButton, background: "rgba(214,69,69,0.08)", border: "1px solid rgba(214,69,69,0.20)", fontSize: 13, color: red, padding: "6px 14px" }}>Delete</button>
+                  <button className="ui-interactive-button" onClick={deleteSession} style={{ ...actionButton, background: "rgba(214,69,69,0.08)", border: "1px solid rgba(214,69,69,0.20)", fontSize: 13, color: red, padding: "6px 14px" }}>Delete</button>
                 </div>
               </div>
             </div>
