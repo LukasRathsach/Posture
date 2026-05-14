@@ -1,3 +1,7 @@
+<!-- AI-CONFIG:START -->
+> Shared AI context: read `~/.claude/AI_CONFIG_INDEX.md` first, then this project file. Universal rules and skills live in `~/.claude/`; project-specific context stays here.
+<!-- AI-CONFIG:END -->
+
 # Posture — Project Instructions
 
 ## Purpose
