@@ -448,7 +448,7 @@ These three must be done before inviting anyone in:
 
 - [ ] **Onboarding flow in extension** — new user must understand balance setup and what the overlay does before hitting buy for the first time
 - [ ] **Dashboard empty state** — first open should guide the user forward, not show a blank calendar
-- [ ] **DexScreener WebSocket as primary MC source** — DOM scraping is too fragile to expose to others. A single Axiom deploy can break MC capture for all users simultaneously. This is the biggest unmitigated risk in the product. Promoted from medium-term.
+- [x] **DexScreener as primary data source** — implemented 2026-05-15. `fetchDexScreenerPairInfo()` fetches REST on coin load and seeds `state.dexData` (ticker, MC, CA, supply, price changes). Live MC uses DexScreener seed scaled by Axiom's WebSocket price ratio — instant on every tick, no DOM scraping for MC. DOM scraping kept only as final fallback.
 
 ---
 
