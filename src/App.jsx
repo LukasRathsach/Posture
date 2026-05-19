@@ -38,23 +38,66 @@ const LOCAL_STORAGE_KEY = "trading-dashboard-sessions";
 
 const ACCENT_PRESETS = [
   {
-    key: "axiom", base: "#50ff6c", dim: "#3de858", rgb: "80,255,108", swatch: "#0C0D10",
+    key: "carbon",
+    label: "Carbon",
+    base: "#0f62fe",
+    dim: "#78a9ff",
+    rgb: "15,98,254",
+    swatch: "linear-gradient(135deg, #161616 0%, #262626 48%, #0f62fe 48%, #0f62fe 100%)",
+    dark: {
+      bg: "#161616",
+      headerBg: "rgba(22,22,22,0.94)",
+      surface1: "#262626",
+      surface2: "#393939",
+      surface3: "#525252",
+      border: "#393939",
+      borderSub: "#525252",
+      text: "#f4f4f4",
+      textMid: "#c6c6c6",
+      textDim: "#8d8d8d",
+      modalBg: "rgba(22,22,22,0.96)",
+      modalSurf: "#262626",
+      inp: { bg: "#262626", border: "#6f6f6f", color: "#f4f4f4" },
+      calWin: { bg: "#193521", border: "#24a148" },
+      calBigWin: { bg: "#3d2f00", border: "#f1c21b", text: "#f1c21b" },
+      calLoss: { bg: "#3a1a1a", border: "#da1e28" },
+    },
+    light: {
+      bg: "#f4f4f4",
+      surface1: "#ffffff",
+      surface2: "#f4f4f4",
+      surface3: "#e0e0e0",
+      border: "#e0e0e0",
+      borderSub: "#c6c6c6",
+      text: "#161616",
+      textMid: "#525252",
+      textDim: "#6f6f6f",
+      modalBg: "#ffffff",
+      modalSurf: "#ffffff",
+      inp: { bg: "#ffffff", border: "#8d8d8d", color: "#161616" },
+      calWin: { bg: "#defbe6", border: "#24a148" },
+      calBigWin: { bg: "#fcf4d6", border: "#f1c21b", text: "#684e00" },
+      calLoss: { bg: "#fff1f1", border: "#da1e28" },
+    },
+  },
+  {
+    key: "axiom", label: "Axiom", base: "#50ff6c", dim: "#3de858", rgb: "80,255,108", swatch: "#0C0D10",
     dark: { bg: "#0C0D10", headerBg: "rgba(12,13,16,0.92)", surface1: "#0C0D10", surface2: "#111214", surface3: "#131416", border: "rgba(255,255,255,0.10)", borderSub: "rgba(255,255,255,0.07)", inp: { bg: "rgba(0,0,0,0.22)", border: "rgba(255,255,255,0.10)", color: "#F3F4F6" } },
   },
   {
-    key: "amber", base: "#F59E0B", dim: "#D97706", rgb: "245,158,11",
+    key: "amber", label: "Amber", base: "#F59E0B", dim: "#D97706", rgb: "245,158,11",
     dark: { bg: "#0F172A", headerBg: "rgba(15,23,42,0.82)", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929", border: "#334155", borderSub: "#1E293B", inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" } },
   },
   {
-    key: "teal", base: "#14B8A6", dim: "#0D9488", rgb: "20,184,166",
+    key: "teal", label: "Teal", base: "#14B8A6", dim: "#0D9488", rgb: "20,184,166",
     dark: { bg: "#061516", headerBg: "rgba(6,21,22,0.82)", surface1: "#0C2426", surface2: "#081B1D", surface3: "#051012", border: "#165054", borderSub: "#0C2426", inp: { bg: "#0C2426", border: "#165054", color: "#F8FAFC" } },
   },
   {
-    key: "violet", base: "#8B5CF6", dim: "#7C3AED", rgb: "139,92,246",
+    key: "violet", label: "Violet", base: "#8B5CF6", dim: "#7C3AED", rgb: "139,92,246",
     dark: { bg: "#0D0B18", headerBg: "rgba(13,11,24,0.82)", surface1: "#17132A", surface2: "#110F21", surface3: "#0A0815", border: "#2C2350", borderSub: "#17132A", inp: { bg: "#17132A", border: "#2C2350", color: "#F8FAFC" } },
   },
   {
-    key: "rose", base: "#F43F5E", dim: "#E11D48", rgb: "244,63,94",
+    key: "rose", label: "Rose", base: "#F43F5E", dim: "#E11D48", rgb: "244,63,94",
     dark: { bg: "#130810", headerBg: "rgba(19,8,16,0.82)", surface1: "#221018", surface2: "#1A0C15", surface3: "#0F060C", border: "#3D1425", borderSub: "#221018", inp: { bg: "#221018", border: "#3D1425", color: "#F8FAFC" } },
   },
 ];
@@ -85,7 +128,7 @@ function loadLocalSessions() {
 export default function App() {
   // ── Theme ──────────────────────────────────────────────────────────────────
   const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const [accentKey, setAccentKey] = useState(() => localStorage.getItem("posture_accent_key") || "axiom");
+  const [accentKey, setAccentKey] = useState(() => localStorage.getItem("posture_accent_key") || "carbon");
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const h = e => setDark(e.matches);
@@ -97,15 +140,23 @@ export default function App() {
   const accentDim = activeAccentPreset.dim;
   const accentRgb = activeAccentPreset.rgb || "80,255,108";
   const baseDark = THEME.dark;
+  const activeDarkTheme = activeAccentPreset.dark || {};
+  const activeLightTheme = activeAccentPreset.light || {};
   const tk = dark
-    ? { ...baseDark, ...activeAccentPreset.dark, modalBg: activeAccentPreset.dark.bg, modalSurf: activeAccentPreset.dark.surface1 }
-    : THEME.light;
-  const headerBg = dark ? (activeAccentPreset.dark.headerBg || "rgba(12,13,16,0.82)") : tk.modalBg;
+    ? {
+        ...baseDark,
+        ...activeDarkTheme,
+        modalBg: activeDarkTheme.modalBg || activeDarkTheme.bg || baseDark.modalBg,
+        modalSurf: activeDarkTheme.modalSurf || activeDarkTheme.surface1 || baseDark.modalSurf,
+      }
+    : { ...THEME.light, ...activeLightTheme };
+  const headerBg = dark ? (activeDarkTheme.headerBg || "rgba(12,13,16,0.82)") : tk.modalBg;
   useEffect(() => {
-    if (!dark) return;
-    document.documentElement.style.background = activeAccentPreset.dark.bg;
-    document.body.style.background = activeAccentPreset.dark.bg;
-  }, [accentKey, dark]);
+    document.documentElement.style.background = tk.bg;
+    document.body.style.background = tk.bg;
+    document.documentElement.style.setProperty("--posture-focus", accent);
+    document.documentElement.style.setProperty("--posture-focus-shadow", `rgba(${accentRgb}, 0.18)`);
+  }, [accent, accentRgb, tk.bg]);
 
   // ── Settings panel ─────────────────────────────────────────────────────────
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
@@ -1986,12 +2037,15 @@ export default function App() {
 
   // ── Settings panel ────────────────────────────────────────────────────────
   const settingsPanel = settingsPanelOpen && (
-    <div className="ui-panel-pop" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 216, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div className="ui-panel-pop" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 264, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
-        <div style={{ display: "flex", gap: 7 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
           {ACCENT_PRESETS.map(p => (
-            <button key={p.key} title={p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ width: 24, height: 24, borderRadius: "50%", background: p.swatch || p.base, border: accentKey === p.key ? `2.5px solid ${tk.text}` : p.swatch ? `2.5px solid ${dark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.20)"}` : "2.5px solid transparent", outline: "none", cursor: "pointer", padding: 0, flexShrink: 0, boxShadow: accentKey === p.key ? `0 0 0 3px ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"}` : "none" }} />
+            <button key={p.key} title={p.label || p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, height: 32, borderRadius: 8, background: accentKey === p.key ? (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)") : "transparent", border: `1px solid ${accentKey === p.key ? tk.textDim : tk.borderSub}`, outline: "none", cursor: "pointer", padding: "0 8px", color: accentKey === p.key ? tk.text : tk.textMid, fontSize: 12, fontWeight: 650, fontFamily: sans, textAlign: "left" }}>
+              <span style={{ width: 16, height: 16, borderRadius: "50%", background: p.swatch || p.base, border: `1px solid ${dark ? "rgba(255,255,255,0.24)" : "rgba(0,0,0,0.18)"}`, flexShrink: 0 }} />
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label || p.key}</span>
+            </button>
           ))}
         </div>
       </div>
