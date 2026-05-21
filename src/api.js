@@ -158,6 +158,7 @@ export async function loadClosedAndOpenPaperTrades(userId) {
       id: trade.id,
       positionId: parsed.positionId,
       tokenName: parsed.tokenName,
+      tokenFullName: parsed.tokenFullName,
       positionSizeSol: parsed.positionSizeSol,
       initialSizeSol: parsed.initialSizeSol,
       entryMarketCap: parsed.entryMarketCap,
@@ -223,4 +224,3 @@ export async function listInvites() {
   if (error) throw error;
   return data || [];
 }
-

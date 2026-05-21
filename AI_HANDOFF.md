@@ -325,6 +325,8 @@ Current key selectors:
 
 `tokenFullName` is best-effort. If Axiom doesn't expose it in `__NEXT_DATA__`, the field stays `null` and UI degrades gracefully to ticker-only.
 
+For dashboard live positions, prefer the extension's in-memory/chrome-storage open-position naming when the backend open-trade row only surfaces a contract-like fallback as `tokenName`. The backend row alone is not reliable enough for display naming on older open positions.
+
 ---
 
 ## Extension ↔ Dashboard sync
@@ -402,7 +404,7 @@ The dashboard requests balance on load and on tab focus. `td_virtual_balance` is
 ## Local development
 
 Extension bridge injects on:
-- `https://trading-dashboard-v8ns.onrender.com/*`
+- `https://posture-chi.vercel.app/*`
 - `http://localhost/*` and `http://127.0.0.1/*`
 
 When a localhost dashboard tab is already open, the extension prefers it over production — intentional for local testing without deploying.

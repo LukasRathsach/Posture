@@ -11,7 +11,7 @@
   "host_permissions": [
     "https://*.supabase.co/*",
     "https://api.dexscreener.com/*",
-    "https://trading-dashboard-v8ns.onrender.com/*",
+    "https://posture-chi.vercel.app/*",
     "https://*.ingest.de.sentry.io/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
@@ -38,7 +38,7 @@
     },
     {
       "matches": [
-        "https://trading-dashboard-v8ns.onrender.com/*",
+        "https://posture-chi.vercel.app/*",
         "http://localhost/*",
         "http://localhost:*/*",
         "http://127.0.0.1/*",

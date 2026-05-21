@@ -38,46 +38,46 @@ const LOCAL_STORAGE_KEY = "trading-dashboard-sessions";
 
 const ACCENT_PRESETS = [
   {
-    key: "carbon",
-    label: "Carbon",
-    base: "#0f62fe",
-    dim: "#78a9ff",
-    rgb: "15,98,254",
-    swatch: "linear-gradient(135deg, #161616 0%, #262626 48%, #0f62fe 48%, #0f62fe 100%)",
+    key: "polaris",
+    label: "Polaris",
+    base: "#005bd3",
+    dim: "#004299",
+    rgb: "0,91,211",
+    swatch: "linear-gradient(135deg, #f7f7f7 0%, #ffffff 48%, #005bd3 48%, #005bd3 100%)",
     dark: {
-      bg: "#161616",
-      headerBg: "rgba(22,22,22,0.94)",
-      surface1: "#262626",
-      surface2: "#393939",
-      surface3: "#525252",
-      border: "#393939",
-      borderSub: "#525252",
-      text: "#f4f4f4",
-      textMid: "#c6c6c6",
-      textDim: "#8d8d8d",
-      modalBg: "rgba(22,22,22,0.96)",
-      modalSurf: "#262626",
-      inp: { bg: "#262626", border: "#6f6f6f", color: "#f4f4f4" },
-      calWin: { bg: "#193521", border: "#24a148" },
-      calBigWin: { bg: "#3d2f00", border: "#f1c21b", text: "#f1c21b" },
-      calLoss: { bg: "#3a1a1a", border: "#da1e28" },
+      bg: "#1a1a1a",
+      headerBg: "rgba(26,26,26,0.92)",
+      surface1: "#202020",
+      surface2: "#262626",
+      surface3: "#303030",
+      border: "rgba(227,227,227,0.13)",
+      borderSub: "rgba(227,227,227,0.08)",
+      text: "#f1f1f1",
+      textMid: "#cccccc",
+      textDim: "#8a8a8a",
+      modalBg: "rgba(26,26,26,0.96)",
+      modalSurf: "#202020",
+      inp: { bg: "#262626", border: "rgba(227,227,227,0.14)", color: "#f1f1f1" },
+      calWin: { bg: "#0b2b25", border: "#047b5d" },
+      calBigWin: { bg: "#332e00", border: "#998a00", text: "#ffeb78" },
+      calLoss: { bg: "#3b0710", border: "#8e0b21" },
     },
     light: {
-      bg: "#f4f4f4",
+      bg: "#f1f1f1",
       surface1: "#ffffff",
-      surface2: "#f4f4f4",
-      surface3: "#e0e0e0",
-      border: "#e0e0e0",
-      borderSub: "#c6c6c6",
-      text: "#161616",
-      textMid: "#525252",
-      textDim: "#6f6f6f",
+      surface2: "#f7f7f7",
+      surface3: "#ebebeb",
+      border: "#e3e3e3",
+      borderSub: "#ebebeb",
+      text: "#303030",
+      textMid: "#616161",
+      textDim: "#8a8a8a",
       modalBg: "#ffffff",
       modalSurf: "#ffffff",
-      inp: { bg: "#ffffff", border: "#8d8d8d", color: "#161616" },
-      calWin: { bg: "#defbe6", border: "#24a148" },
-      calBigWin: { bg: "#fcf4d6", border: "#f1c21b", text: "#684e00" },
-      calLoss: { bg: "#fff1f1", border: "#da1e28" },
+      inp: { bg: "#ffffff", border: "#cccccc", color: "#303030" },
+      calWin: { bg: "#e3fff1", border: "#047b5d" },
+      calBigWin: { bg: "#fff8db", border: "#b98900", text: "#5e4200" },
+      calLoss: { bg: "#fff1f3", border: "#c70a24" },
     },
   },
   {
@@ -128,7 +128,10 @@ function loadLocalSessions() {
 export default function App() {
   // ── Theme ──────────────────────────────────────────────────────────────────
   const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const [accentKey, setAccentKey] = useState(() => localStorage.getItem("posture_accent_key") || "carbon");
+  const [accentKey, setAccentKey] = useState(() => {
+    const stored = localStorage.getItem("posture_accent_key");
+    return stored === "carbon" ? "polaris" : (stored || "polaris");
+  });
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const h = e => setDark(e.matches);
@@ -151,12 +154,35 @@ export default function App() {
       }
     : { ...THEME.light, ...activeLightTheme };
   const headerBg = dark ? (activeDarkTheme.headerBg || "rgba(12,13,16,0.82)") : tk.modalBg;
+  const isPolarisTheme = activeAccentPreset.key === "polaris";
+  const polaris = {
+    radius: {
+      panel: 12,
+      card: 12,
+      control: 8,
+      modal: 16,
+      small: 6,
+      pill: 999,
+    },
+    shadow: dark ? "0 1px 0 rgba(255,255,255,0.04)" : "0 1px 0 rgba(26,26,26,0.05), 0 1px 3px rgba(26,26,26,0.08)",
+    popShadow: dark ? "0 16px 40px rgba(0,0,0,0.38)" : "0 16px 40px rgba(26,26,26,0.14)",
+    hover: dark ? "rgba(255,255,255,0.06)" : "rgba(48,48,48,0.06)",
+    active: dark ? "rgba(255,255,255,0.10)" : "rgba(48,48,48,0.10)",
+    inputShadow: dark ? "inset 0 1px 0 rgba(255,255,255,0.03)" : "inset 0 1px 0 rgba(26,26,26,0.03)",
+    primaryBg: accent,
+    primaryBgHover: accentDim,
+    primaryText: "#ffffff",
+    secondaryBg: dark ? "#303030" : "#ffffff",
+    secondaryBgHover: dark ? "#383838" : "#f7f7f7",
+  };
   useEffect(() => {
     document.documentElement.style.background = tk.bg;
     document.body.style.background = tk.bg;
     document.documentElement.style.setProperty("--posture-focus", accent);
     document.documentElement.style.setProperty("--posture-focus-shadow", `rgba(${accentRgb}, 0.18)`);
-  }, [accent, accentRgb, tk.bg]);
+    document.documentElement.style.setProperty("--posture-hover", isPolarisTheme ? polaris.hover : "rgba(255,255,255,0.04)");
+    document.documentElement.style.setProperty("--posture-active", isPolarisTheme ? polaris.active : "rgba(255,255,255,0.08)");
+  }, [accent, accentRgb, isPolarisTheme, polaris.active, polaris.hover, tk.bg]);
 
   // ── Settings panel ─────────────────────────────────────────────────────────
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
@@ -591,6 +617,11 @@ export default function App() {
     return `$${mc.toFixed(0)}`;
   };
 
+  const looksLikeAddressFallback = value => {
+    const text = String(value || "").trim();
+    return /^[1-9A-HJ-NP-Za-km-z]{24,}$/.test(text);
+  };
+
   const syncExtensionOpenPositions = nextPositions => {
     const normalized = nextPositions && typeof nextPositions === "object" ? nextPositions : {};
     setExtensionOpenPositions(normalized);
@@ -637,6 +668,32 @@ export default function App() {
         return true;
       });
   }, [extensionOpenPositions]);
+
+  const displayOpenTrades = useMemo(() => {
+    return openTrades.map(pos => {
+      const extensionMatch = normalizedExtensionOpenTrades.find(candidate => {
+        if (!candidate || !pos) return false;
+        if (candidate.positionId && pos.positionId && candidate.positionId === pos.positionId) return true;
+        if (candidate.contractAddress && pos.contractAddress && candidate.contractAddress === pos.contractAddress) return true;
+        if (!candidate.contractAddress && !pos.contractAddress && candidate.tokenName && pos.tokenName && candidate.tokenName === pos.tokenName) return true;
+        return false;
+      });
+
+      if (!extensionMatch) return pos;
+
+      const backendNameLooksFallback = looksLikeAddressFallback(pos.tokenName);
+      const nextTokenName = backendNameLooksFallback
+        ? (extensionMatch.tokenName || pos.tokenName)
+        : (pos.tokenName || extensionMatch.tokenName);
+      const nextTokenFullName = pos.tokenFullName || extensionMatch.tokenFullName || null;
+
+      return {
+        ...pos,
+        tokenName: nextTokenName,
+        tokenFullName: nextTokenFullName,
+      };
+    });
+  }, [normalizedExtensionOpenTrades, openTrades]);
 
   const allTrades = useMemo(() => sessions.flatMap(s => s.tradeList || []), [sessions]);
   const allTimeNet = useMemo(() => sessions.reduce((a, s) => a + netPnl(s), 0), [sessions]);
@@ -895,30 +952,42 @@ export default function App() {
 
   // ── Style primitives ───────────────────────────────────────────────────────
   const inp = {
-    fontSize: 14, padding: "11px 13px", borderRadius: 8,
+    fontSize: 14,
+    padding: isPolarisTheme ? "9px 12px" : "11px 13px",
+    borderRadius: isPolarisTheme ? polaris.radius.control : 8,
     border: `1px solid ${tk.inp.border}`, background: tk.inp.bg,
     color: tk.inp.color, fontFamily: sans, width: "100%",
     WebkitAppearance: "none", outline: "none",
+    boxShadow: isPolarisTheme ? polaris.inputShadow : "none",
   };
   const panel = {
     background: tk.surface1,
     border: `1px solid ${tk.border}`,
-    borderRadius: 8,
-    boxShadow: "none",
+    borderRadius: isPolarisTheme ? polaris.radius.panel : 8,
+    boxShadow: isPolarisTheme ? polaris.shadow : "none",
   };
   const quietPanel = {
     background: tk.surface2,
     border: `1px solid ${tk.borderSub}`,
-    borderRadius: 8,
+    borderRadius: isPolarisTheme ? polaris.radius.card : 8,
+    boxShadow: isPolarisTheme ? polaris.shadow : "none",
   };
   const actionButton = {
     border: `1px solid ${tk.border}`,
-    background: dark ? "rgba(255,255,255,0.03)" : tk.surface2,
+    background: isPolarisTheme ? polaris.secondaryBg : (dark ? "rgba(255,255,255,0.03)" : tk.surface2),
     color: tk.text,
-    borderRadius: 8,
+    borderRadius: isPolarisTheme ? polaris.radius.control : 8,
     cursor: "pointer",
     fontFamily: sans,
     fontWeight: 600,
+    boxShadow: isPolarisTheme ? polaris.shadow : "none",
+  };
+  const primaryButton = {
+    ...actionButton,
+    background: isPolarisTheme ? polaris.primaryBg : "rgba(16,163,127,0.10)",
+    borderColor: isPolarisTheme ? polaris.primaryBg : `${accent}44`,
+    color: isPolarisTheme ? polaris.primaryText : accent,
+    boxShadow: isPolarisTheme ? (dark ? "0 1px 0 rgba(255,255,255,0.08)" : "0 1px 0 rgba(0,0,0,0.12)") : "none",
   };
   const headerAction = {
     background: "transparent",
@@ -933,11 +1002,12 @@ export default function App() {
   const headerButton = {
     ...actionButton,
     background: "transparent",
-    borderRadius: 8,
+    borderRadius: isPolarisTheme ? polaris.radius.control : 8,
     padding: "8px 14px",
     fontSize: 13,
     color: tk.text,
     lineHeight: 1,
+    boxShadow: "none",
   };
   const streakLevel = curStreak >= 7 ? "inferno" : curStreak >= 4 ? "hot" : "warm";
   const streakTone = curStreakPos && curStreak >= 2 ? {
@@ -1019,26 +1089,26 @@ export default function App() {
   const modalPad = 20;
   const uiPalette = {
     neutral: {
-      bg: dark ? "rgba(255,255,255,0.03)" : "rgba(31,35,40,0.035)",
-      border: dark ? "rgba(255,255,255,0.07)" : "rgba(31,35,40,0.08)",
+      bg: isPolarisTheme ? tk.surface2 : (dark ? "rgba(255,255,255,0.03)" : "rgba(31,35,40,0.035)"),
+      border: isPolarisTheme ? tk.borderSub : (dark ? "rgba(255,255,255,0.07)" : "rgba(31,35,40,0.08)"),
       text: tk.textMid,
       strongText: tk.text,
     },
     accent: {
-      bg: dark ? `rgba(${accentRgb},0.09)` : `rgba(${accentRgb},0.08)`,
-      border: dark ? `rgba(${accentRgb},0.22)` : `rgba(${accentRgb},0.18)`,
+      bg: isPolarisTheme ? (dark ? "rgba(0,91,211,0.20)" : "#ebf1ff") : (dark ? `rgba(${accentRgb},0.09)` : `rgba(${accentRgb},0.08)`),
+      border: isPolarisTheme ? (dark ? "rgba(0,91,211,0.44)" : "#b5c9fc") : (dark ? `rgba(${accentRgb},0.22)` : `rgba(${accentRgb},0.18)`),
       text: accent,
       strongText: tk.text,
     },
     success: {
-      bg: dark ? "rgba(34,197,94,0.09)" : "rgba(34,197,94,0.08)",
-      border: dark ? "rgba(34,197,94,0.22)" : "rgba(21,128,61,0.16)",
+      bg: isPolarisTheme ? (dark ? "rgba(4,123,93,0.18)" : "#e3fff1") : (dark ? "rgba(34,197,94,0.09)" : "rgba(34,197,94,0.08)"),
+      border: isPolarisTheme ? (dark ? "rgba(4,123,93,0.40)" : "#95e2bd") : (dark ? "rgba(34,197,94,0.22)" : "rgba(21,128,61,0.16)"),
       text: green,
       strongText: tk.text,
     },
     error: {
-      bg: dark ? "rgba(239,68,68,0.08)" : "rgba(239,68,68,0.07)",
-      border: dark ? "rgba(239,68,68,0.18)" : "rgba(185,28,28,0.14)",
+      bg: isPolarisTheme ? (dark ? "rgba(142,11,33,0.22)" : "#fff1f3") : (dark ? "rgba(239,68,68,0.08)" : "rgba(239,68,68,0.07)"),
+      border: isPolarisTheme ? (dark ? "rgba(142,11,33,0.44)" : "#fecdd3") : (dark ? "rgba(239,68,68,0.18)" : "rgba(185,28,28,0.14)"),
       text: red,
       strongText: tk.text,
     },
@@ -1050,10 +1120,11 @@ export default function App() {
   const calendarSectionBg = tk.bg;
   const railSectionBg = tk.surface1;
   const openTradeCard = {
-    background: dark ? "rgba(255,255,255,0.04)" : tk.surface2,
+    background: isPolarisTheme ? tk.surface1 : (dark ? "rgba(255,255,255,0.04)" : tk.surface2),
     border: `1px solid ${tk.borderSub}`,
-    borderRadius: 12,
+    borderRadius: isPolarisTheme ? polaris.radius.card : 12,
     padding: "10px 11px",
+    boxShadow: isPolarisTheme ? polaris.shadow : "none",
   };
   const readinessPalette = missionStats.ready
     ? {
@@ -1257,7 +1328,7 @@ export default function App() {
               <label style={{ fontSize: 10, color: `${accent}77`, textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 4 }}>Notes</label>
               <input placeholder="Setup..." value={tradeForm.notes} onChange={e => setTradeForm(p => ({ ...p, notes: e.target.value }))} style={{ ...inp, fontSize: 12, padding: "8px 10px" }} />
             </div>
-            <button className="ui-interactive-button" onClick={addTradeToSession} style={{ width: "100%", padding: "11px", fontSize: 13, fontWeight: 700, borderRadius: 999, border: `1px solid ${accent}44`, background: "rgba(16,163,127,0.10)", color: accent, cursor: "pointer", fontFamily: sans }}>Save trade</button>
+            <button className="ui-interactive-button" onClick={addTradeToSession} style={{ ...primaryButton, width: "100%", padding: "11px", fontSize: 13, fontWeight: 700, borderRadius: isPolarisTheme ? polaris.radius.control : 999 }}>Save trade</button>
           </div>
         )}
 
@@ -1401,7 +1472,7 @@ export default function App() {
           const usd = solPrice !== null ? dn * solPrice : null;
 
           if (!s) return (
-            <div key={day} style={{ borderRadius: isDesktop ? 6 : 4, minHeight: minH, padding: isDesktop ? "8px 10px" : "8px 9px", background: tk.surface2, border: "none", opacity: dark ? 0.5 : 0.62 }}>
+            <div key={day} style={{ borderRadius: isPolarisTheme ? polaris.radius.small : (isDesktop ? 6 : 4), minHeight: minH, padding: isDesktop ? "8px 10px" : "8px 9px", background: tk.surface2, border: isPolarisTheme ? `1px solid ${tk.borderSub}` : "none", opacity: dark ? 0.5 : 0.62 }}>
               <span style={{ fontSize: 11, color: tk.textDim }}>{day}</span>
             </div>
           );
@@ -1431,12 +1502,12 @@ export default function App() {
               }}
               onMouseLeave={() => setCalendarHover(null)}
               style={{
-                borderRadius: 0, minHeight: minH, padding: isDesktop ? "8px 10px" : "8px 9px",
+                borderRadius: isPolarisTheme ? polaris.radius.small : 0, minHeight: minH, padding: isDesktop ? "8px 10px" : "8px 9px",
                 background: bg,
                 border: `1px solid ${isSel ? border : isDesktop ? "transparent" : border}`,
                 outline: isSel ? `1px solid ${border}` : "none",
                 cursor: "pointer", display: "flex", flexDirection: "column", justifyContent: "space-between",
-                boxShadow: "none",
+                boxShadow: isPolarisTheme && isSel ? `0 0 0 2px ${accent}` : "none",
               }}
             >
               <span className="calendar-session-day" style={{ fontSize: 11, color: tk.textDim }}>{day}</span>
@@ -1547,7 +1618,7 @@ export default function App() {
               </div>
             )}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {openTrades.map(pos => {
+              {displayOpenTrades.map((pos, index) => {
                 const entryMC = pos.entryMarketCap;
                 const sizeSol = pos.positionSizeSol;
                 const sizeUsd = solPrice ? sizeSol * solPrice : null;
@@ -1556,7 +1627,7 @@ export default function App() {
                   : `$${sizeUsd.toFixed(2)}`;
                 const deleteBusy = openTradeDeleteBusyId === pos.positionId;
                 return (
-                  <div key={pos.positionId} className="ui-card-reveal" style={{ ...quietPanel, padding: cardPad, cursor: pos.pageUrl ? "pointer" : "default", animationDelay: `${Math.min(openTrades.indexOf(pos), 5) * 28}ms` }}
+                  <div key={pos.positionId} className="ui-card-reveal" style={{ ...quietPanel, padding: cardPad, cursor: pos.pageUrl ? "pointer" : "default", animationDelay: `${Math.min(index, 5) * 28}ms` }}
                     onClick={() => pos.pageUrl && window.open(pos.pageUrl, "_blank", "noopener,noreferrer")}
                   >
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
@@ -1817,7 +1888,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="ui-panel-pop" style={{ ...panel, padding: `${modalPad + 4}px ${modalPad + 2}px`, borderRadius: 16, boxShadow: dark ? "0 18px 40px rgba(0,0,0,0.18)" : "0 20px 40px rgba(31,35,40,0.08)" }}>
+        <div className="ui-panel-pop" style={{ ...panel, padding: `${modalPad + 4}px ${modalPad + 2}px`, borderRadius: isPolarisTheme ? polaris.radius.modal : 16, boxShadow: isPolarisTheme ? polaris.popShadow : (dark ? "0 18px 40px rgba(0,0,0,0.18)" : "0 20px 40px rgba(31,35,40,0.08)") }}>
           {!hasSupabaseConfig ? (
             <>
               <div style={{ fontSize: 15, fontWeight: 700, color: tk.text, marginBottom: 8 }}>Connect Supabase</div>
@@ -1853,7 +1924,7 @@ export default function App() {
                       onClick={() => switchMode(mode)}
                       style={{
                         ...actionButton,
-                        borderRadius: 999,
+                        borderRadius: isPolarisTheme ? polaris.radius.control : 999,
                         padding: "9px 12px",
                         background: authMode === mode ? (dark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.05)") : "transparent",
                         borderColor: authMode === mode ? tk.border : tk.borderSub,
@@ -1959,17 +2030,17 @@ export default function App() {
                     || (authMode === "sign-up" && !authForm.inviteCode.trim())
                   }
                   style={{
-                    ...actionButton,
+                    ...(isPolarisTheme ? primaryButton : actionButton),
                     padding: "12px 16px",
-                    borderRadius: 999,
-                    background: tk.surface2,
-                    borderColor: tk.border,
-                    color: tk.text,
+                    borderRadius: isPolarisTheme ? polaris.radius.control : 999,
+                    background: isPolarisTheme ? polaris.primaryBg : tk.surface2,
+                    borderColor: isPolarisTheme ? polaris.primaryBg : tk.border,
+                    color: isPolarisTheme ? polaris.primaryText : tk.text,
                     fontWeight: 600,
                     fontSize: 14,
                     marginTop: 2,
                     minHeight: 44,
-                    boxShadow: authBusy ? "none" : (dark ? "0 8px 18px rgba(0,0,0,0.14)" : "0 8px 18px rgba(31,35,40,0.06)"),
+                    boxShadow: authBusy ? "none" : (isPolarisTheme ? polaris.shadow : (dark ? "0 8px 18px rgba(0,0,0,0.14)" : "0 8px 18px rgba(31,35,40,0.06)")),
                   }}
                 >
                   {authBusy ? (
@@ -2037,12 +2108,12 @@ export default function App() {
 
   // ── Settings panel ────────────────────────────────────────────────────────
   const settingsPanel = settingsPanelOpen && (
-    <div className="ui-panel-pop" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 264, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)", padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div className="ui-panel-pop" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 264, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: isPolarisTheme ? polaris.radius.modal : 10, boxShadow: isPolarisTheme ? polaris.popShadow : (dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)"), padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
           {ACCENT_PRESETS.map(p => (
-            <button key={p.key} title={p.label || p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, height: 32, borderRadius: 8, background: accentKey === p.key ? (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)") : "transparent", border: `1px solid ${accentKey === p.key ? tk.textDim : tk.borderSub}`, outline: "none", cursor: "pointer", padding: "0 8px", color: accentKey === p.key ? tk.text : tk.textMid, fontSize: 12, fontWeight: 650, fontFamily: sans, textAlign: "left" }}>
+            <button key={p.key} title={p.label || p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, height: 32, borderRadius: isPolarisTheme ? polaris.radius.control : 8, background: accentKey === p.key ? (isPolarisTheme ? (dark ? "rgba(0,91,211,0.18)" : "#ebf1ff") : (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)")) : "transparent", border: `1px solid ${accentKey === p.key ? accent : tk.borderSub}`, outline: "none", cursor: "pointer", padding: "0 8px", color: accentKey === p.key ? tk.text : tk.textMid, fontSize: 12, fontWeight: 650, fontFamily: sans, textAlign: "left" }}>
               <span style={{ width: 16, height: 16, borderRadius: "50%", background: p.swatch || p.base, border: `1px solid ${dark ? "rgba(255,255,255,0.24)" : "rgba(0,0,0,0.18)"}`, flexShrink: 0 }} />
               <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label || p.key}</span>
             </button>
@@ -2051,11 +2122,11 @@ export default function App() {
       </div>
       {authUser && (
         <div style={{ borderTop: `1px solid ${tk.border}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-          <button className="ui-interactive-button" onClick={async () => { await signOutUser(); setSettingsPanelOpen(false); }} style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, color: tk.textMid, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Sign out</button>
+          <button className="ui-interactive-button" onClick={async () => { await signOutUser(); setSettingsPanelOpen(false); }} style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: isPolarisTheme ? polaris.radius.control : 7, padding: "6px 10px", fontSize: 12, color: tk.textMid, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Sign out</button>
           <button onClick={async () => {
             if (!window.confirm("Delete your account? This cannot be undone.")) return;
             try { await deleteCurrentUser(); } catch { window.alert("Couldn't delete account — contact support."); }
-          }} className="ui-interactive-button" style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, color: red, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Delete account</button>
+          }} className="ui-interactive-button" style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: isPolarisTheme ? polaris.radius.control : 7, padding: "6px 10px", fontSize: 12, color: red, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Delete account</button>
         </div>
       )}
     </div>
@@ -2099,9 +2170,9 @@ export default function App() {
         flexShrink: 0,
         padding: balanceModalOpen || balanceHover ? "5px 8px" : "5px 8px 5px 0",
         marginLeft: balanceModalOpen || balanceHover ? `-8px` : "0",
-        background: balanceModalOpen || balanceHover ? (dark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.05)") : "transparent",
+        background: balanceModalOpen || balanceHover ? (isPolarisTheme ? polaris.hover : (dark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.05)")) : "transparent",
         border: "none",
-        borderRadius: 5,
+        borderRadius: isPolarisTheme ? polaris.radius.control : 5,
         transition: "background 0.14s ease",
       }}
     >
@@ -2132,10 +2203,10 @@ export default function App() {
           background: tk.modalBg,
           width: "100%",
           maxWidth: 380,
-          borderRadius: 16,
+          borderRadius: isPolarisTheme ? polaris.radius.modal : 16,
           padding: modalPad,
           fontFamily: sans,
-          boxShadow: dark ? "0 24px 60px rgba(0,0,0,0.34)" : "0 24px 60px rgba(15,23,42,0.14)",
+          boxShadow: isPolarisTheme ? polaris.popShadow : (dark ? "0 24px 60px rgba(0,0,0,0.34)" : "0 24px 60px rgba(15,23,42,0.14)"),
         }}
       >
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, marginBottom: 18 }}>
@@ -2167,7 +2238,7 @@ export default function App() {
                 }
               }
             }}
-            style={{ flex: 1, background: tk.inp.bg, border: `1px solid ${tk.inp.border}`, color: tk.inp.color, borderRadius: 8, padding: "10px 12px", fontSize: 13, fontFamily: sans, outline: "none", minWidth: 0 }}
+            style={{ ...inp, flex: 1, borderRadius: isPolarisTheme ? polaris.radius.control : 8, padding: "10px 12px", fontSize: 13, minWidth: 0 }}
           />
           <button
             className="ui-interactive-button"
@@ -2179,7 +2250,7 @@ export default function App() {
                 setBalanceModalOpen(false);
               }
             }}
-            style={{ background: `${accent}18`, border: `1px solid ${accent}44`, color: accent, borderRadius: 8, padding: "0 14px", fontSize: 13, fontWeight: 700, fontFamily: sans, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+            style={{ ...primaryButton, borderRadius: isPolarisTheme ? polaris.radius.control : 8, padding: "0 14px", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}
           >
             Add
           </button>
@@ -2270,7 +2341,7 @@ export default function App() {
   // ── Invite panel ──────────────────────────────────────────────────────────
   const invitePanel = invitePanelOpen ? (
     <div onClick={() => setInvitePanelOpen(false)} style={{ position: "fixed", inset: 0, background: dark ? "rgba(0,0,0,0.62)" : "rgba(31,35,40,0.28)", backdropFilter: "blur(8px)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div className="ui-panel-pop" onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: 16, width: "100%", maxWidth: 420, padding: modalPad, fontFamily: sans }}>
+      <div className="ui-panel-pop" onClick={e => e.stopPropagation()} style={{ ...panel, background: tk.modalBg, borderRadius: isPolarisTheme ? polaris.radius.modal : 16, width: "100%", maxWidth: 420, padding: modalPad, fontFamily: sans, boxShadow: isPolarisTheme ? polaris.popShadow : panel.boxShadow }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>Invite codes</span>
           <button className="ui-interactive-button" onClick={() => setInvitePanelOpen(false)} style={{ ...headerButton, color: tk.textMid }}>Close</button>
@@ -2299,7 +2370,7 @@ export default function App() {
             }
           }}
           disabled={inviteGenBusy}
-          style={{ ...actionButton, width: "100%", padding: "10px 14px", borderRadius: 999, background: "rgba(16,163,127,0.10)", borderColor: `${accent}44`, color: accent, marginBottom: 16 }}
+          style={{ ...primaryButton, width: "100%", padding: "10px 14px", borderRadius: isPolarisTheme ? polaris.radius.control : 999, marginBottom: 16 }}
         >
           {inviteGenBusy ? (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -2334,7 +2405,7 @@ export default function App() {
               const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${inv.code}`;
               const copied = inviteCopied === inv.code;
               return (
-                <div key={inv.code} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: cardPad, borderRadius: 8, background: inv.used_at ? tk.surface2 : `${accent}0d`, border: `1px solid ${inv.used_at ? tk.borderSub : accent + "22"}` }}>
+                <div key={inv.code} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: cardPad, borderRadius: isPolarisTheme ? polaris.radius.card : 8, background: inv.used_at ? tk.surface2 : `${accent}0d`, border: `1px solid ${inv.used_at ? tk.borderSub : accent + "22"}`, boxShadow: isPolarisTheme ? polaris.shadow : "none" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                     <span style={{ fontFamily: "monospace", fontSize: 13, letterSpacing: "0.08em", color: inv.used_at ? tk.textDim : tk.text }}>{inv.code}</span>
                     <span style={{ fontSize: 11, color: tk.textDim }}>{inv.used_at ? "Used" : "Available"}</span>

@@ -2,7 +2,7 @@
 
 const OPEN_POSITIONS_KEY = "td_open_positions";
 const BG_PRICE_KEY = "td_bg_price";
-const PROD_DASHBOARD_URL = "https://trading-dashboard-v8ns.onrender.com";
+const PROD_DASHBOARD_URL = "https://posture-chi.vercel.app";
 const LOCAL_DASHBOARD_URLS = [
   "http://127.0.0.1:4173",
   "http://localhost:4173",
