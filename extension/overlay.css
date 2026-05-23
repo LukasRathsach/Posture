@@ -85,6 +85,24 @@
   cursor: grabbing;
 }
 
+.td-overlay-wordmark {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--td-text-faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: color 140ms ease;
+}
+
+.td-overlay-wordmark:hover {
+  color: var(--td-text);
+}
+
 .td-overlay-head-actions {
   display: flex;
   align-items: center;
@@ -241,6 +259,16 @@
   stroke-linejoin: round;
 }
 
+.td-overlay-icon-btn-pos {
+  width: 20px;
+  height: 20px;
+}
+
+.td-overlay-icon-btn-pos svg {
+  width: 16px;
+  height: 16px;
+}
+
 .td-overlay-icon-btn-settings svg {
   width: 14px;
   height: 14px;
@@ -249,17 +277,11 @@
   stroke-width: 0;
 }
 
-@keyframes td-icon-breathe {
-  0%, 100% { opacity: 0.45; }
-  50%       { opacity: 1; }
-}
-
-.td-overlay-icon-btn.is-live:not(.is-active) {
-  animation: td-icon-breathe 2.6s ease-in-out infinite;
-  color: var(--td-text-mid);
-}
-
 .td-overlay-icon-btn.is-active {
+  color: #ffffff;
+}
+
+.td-overlay-icon-btn:hover {
   color: #ffffff;
 }
 

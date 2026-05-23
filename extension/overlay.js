@@ -76,6 +76,7 @@
     automationDrafts: {},
     debugLogging: false,
     advancedTrading: false,
+    caCopiedUntil: 0,
   };
 
   let pageRefreshTimer = null;
@@ -88,54 +89,6 @@
   const root = document.createElement("div");
   root.className = "td-overlay-root";
   document.documentElement.appendChild(root);
-
-  // One-time nonce shared with the injected page-world script so only genuine
-  // WebSocket frames (not spoofed postMessages from other page scripts) are processed.
-  const SOCKET_NONCE = crypto.randomUUID();
-
-  function injectSocketHook() {
-    if (document.getElementById("td-axiom-socket-hook")) return;
-    const script = document.createElement("script");
-    script.id = "td-axiom-socket-hook";
-    // Nonce is baked in at injection time; page scripts that didn't intercept
-    // the WebSocket can't know it and therefore can't spoof valid messages.
-    script.textContent = `
-      (() => {
-        if (window.__TD_AXIOM_SOCKET_HOOK__) return;
-        window.__TD_AXIOM_SOCKET_HOOK__ = true;
-
-        const nonce = ${JSON.stringify(SOCKET_NONCE)};
-        const emit = payload => {
-          window.postMessage({ source: "td-axiom-socket", nonce, payload }, window.location.origin);
-        };
-
-        const wireSocket = socket => {
-          socket.addEventListener("message", event => {
-            try {
-              const data = JSON.parse(event.data);
-              if (!data || typeof data !== "object") return;
-              emit(data);
-            } catch (_error) {}
-          });
-        };
-
-        const NativeWebSocket = window.WebSocket;
-        window.WebSocket = function (...args) {
-          const socket = new NativeWebSocket(...args);
-          wireSocket(socket);
-          return socket;
-        };
-        window.WebSocket.prototype = NativeWebSocket.prototype;
-        Object.setPrototypeOf(window.WebSocket, NativeWebSocket);
-        window.WebSocket.CONNECTING = NativeWebSocket.CONNECTING;
-        window.WebSocket.OPEN = NativeWebSocket.OPEN;
-        window.WebSocket.CLOSING = NativeWebSocket.CLOSING;
-        window.WebSocket.CLOSED = NativeWebSocket.CLOSED;
-      })();
-    `;
-    document.documentElement.appendChild(script);
-    script.remove();
-  }
 
   function handleSocketPayload(data) {
     const room = String(data?.room || "");
@@ -150,10 +103,16 @@
       }
     }
 
-    const pairAddress = state.pairInfo?.pairAddress;
-    if (pairAddress && room === `b-${pairAddress}`) {
+    const activePairAddress = state.dexData?.pairAddress || state.pairInfo?.pairAddress || state.detected?.pairAddress;
+    const activeTokenAddress = state.detected?.contractAddress;
+    const isPriceRoom = room.startsWith("b-") && (
+      (activePairAddress && room === `b-${activePairAddress}`) ||
+      (activeTokenAddress && room === `b-${activeTokenAddress}`)
+    );
+    if (isPriceRoom) {
       const nextPairPrice = Number(data.content || 0);
       if (Number.isFinite(nextPairPrice) && nextPairPrice > 0) {
+        if (!state._wsRefPrice) state._wsRefPrice = nextPairPrice;
         state.livePairPriceNative = nextPairPrice;
         changed = true;
       }
@@ -162,9 +121,9 @@
     if (changed && shouldShowOverlay()) {
       clearTimeout(liveDataRenderTimer);
       liveDataRenderTimer = window.setTimeout(() => {
-        renderUnlessEditing();
+        patchLiveData();
         void maybeRunAutoExit("socket-update");
-      }, 80);
+      }, 16);
     }
   }
 
@@ -1088,33 +1047,53 @@
 
   function getEstimatedLiveMarketCapUsd() {
     const activePairAddress = state.detected?.pairAddress;
-    const livePriceNative = Number(state.livePairPriceNative || 0);
+    const dex = (!activePairAddress || state.dexData?.pairAddress === activePairAddress) ? state.dexData : null;
 
-    // Best path: scale DexScreener's seeded MC by the ratio of live WebSocket price to seed price.
-    // This gives instant MC on every WebSocket tick without needing token supply.
-    const dex = state.dexData?.pairAddress === activePairAddress ? state.dexData : null;
-    if (dex && dex.marketCapUsd > 0 && dex.priceNative > 0 && livePriceNative > 0) {
-      return dex.marketCapUsd * (livePriceNative / dex.priceNative);
+    if (dex && dex.marketCapUsd > 0) {
+      const livePriceNative = Number(state.livePairPriceNative || 0);
+      if (dex.priceNative > 0 && livePriceNative > 0 && livePriceNative !== dex.priceNative) {
+        return dex.marketCapUsd * (livePriceNative / dex.priceNative);
+      }
+      return dex.marketCapUsd;
     }
 
-    // Second path: supply * priceNative * solPrice (legacy DOM-scraped supply)
-    const supply = Number(state.tokenMetadata?.supply || state.pairInfo?.supply || 0);
-    const priceNative = livePriceNative || Number(state.tokenMetadata?.priceNative || 0);
+    // Scale detected MC by live WS price ratio
+    const baseMC = Number(state.detected?.marketCap || 0);
+    const refPrice = Number(state._wsRefPrice || 0);
+    const livePrice = Number(state.livePairPriceNative || 0);
+    if (baseMC > 0 && refPrice > 0 && livePrice > 0) {
+      return baseMC * (livePrice / refPrice);
+    }
+    if (baseMC > 0) return baseMC;
+
     const bgEntry = activePairAddress && state.bgPrice ? state.bgPrice[activePairAddress] : null;
-    const solPriceUsd = Number(state.solPriceUsd || bgEntry?.solPriceUsd || 0);
-    if (supply > 0 && priceNative > 0 && solPriceUsd > 0) {
-      return supply * priceNative * solPriceUsd;
-    }
-
-    // Fallback: background worker's last known MC
     const bgMC = Number(bgEntry?.marketCapUsd || 0);
     return bgMC > 0 ? bgMC : null;
   }
 
   let lastDexFetchPairAddress = null;
-  async function fetchDexScreenerPairInfo(pairAddress) {
-    if (!pairAddress || pairAddress === lastDexFetchPairAddress) return;
-    lastDexFetchPairAddress = pairAddress;
+  let dexPollTimer = null;
+
+  async function fetchDexScreenerByToken(tokenAddress) {
+    if (!tokenAddress) return;
+    try {
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const pairs = data?.pairs;
+      if (!Array.isArray(pairs) || pairs.length === 0) return;
+      const best = pairs.reduce((a, b) => (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a), pairs[0]);
+      const pairAddress = best.pairAddress;
+      if (!pairAddress) return;
+      await fetchDexScreenerPairInfo(pairAddress);
+      startDexPoll(pairAddress);
+    } catch (_) {}
+  }
+
+  async function fetchDexScreenerPairInfo(pairAddress, { silent = false } = {}) {
+    if (!pairAddress) return;
+    const isNewPair = pairAddress !== lastDexFetchPairAddress;
+    if (isNewPair) lastDexFetchPairAddress = pairAddress;
     try {
       const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${pairAddress}`);
       if (!res.ok) return;
@@ -1145,13 +1124,13 @@
         fetchedAt: Date.now(),
       };
 
-      // Seed pairInfo.supply so WebSocket price ticks can derive MC instantly
       if (marketCapUsd > 0 && priceUsd > 0) {
         state.pairInfo = { ...(state.pairInfo || {}), supply: marketCapUsd / priceUsd, pairAddress };
       }
       if (solPriceUsd > 0) state.solPriceUsd = solPriceUsd;
+      // Keep livePairPriceNative in sync with DexScreener's fresh price
+      if (priceNative > 0) state.livePairPriceNative = priceNative;
 
-      // Seed bgPrice so it's available even before background worker fires
       if (marketCapUsd > 0) {
         const existing = state.bgPrice && typeof state.bgPrice === "object" ? { ...state.bgPrice } : {};
         existing[pairAddress] = { marketCapUsd, priceNative, solPriceUsd, ts: Date.now() };
@@ -1159,9 +1138,26 @@
         await chrome.storage.local.set({ [BG_PRICE_KEY]: existing });
       }
 
-      renderUnlessEditing();
+      if (silent) {
+        patchLiveData();
+      } else {
+        renderUnlessEditing();
+      }
       void maybeRunAutoExit("dex-seed");
     } catch (_) {}
+  }
+
+  function startDexPoll(pairAddress) {
+    clearInterval(dexPollTimer);
+    dexPollTimer = setInterval(() => {
+      const activePair = state.detected?.pairAddress || state.dexData?.pairAddress;
+      if (activePair) void fetchDexScreenerPairInfo(activePair, { silent: true });
+    }, 2000);
+  }
+
+  function stopDexPoll() {
+    clearInterval(dexPollTimer);
+    dexPollTimer = null;
   }
 
   function getCurrentLivePnlPct(position) {
@@ -1305,6 +1301,33 @@
     await saveOverlayUiState();
   }
 
+  function patchLiveData() {
+    if (!shouldShowOverlay()) return;
+    if (!root.querySelector('[data-live]')) { renderUnlessEditing(); return; }
+
+    const mc = getEstimatedLiveMarketCapUsd() || state.dexData?.marketCapUsd || state.detected?.marketCap || null;
+
+    const pnlEl = root.querySelector('[data-live="pnl"]');
+    if (!pnlEl) return;
+    const currentPosition = getCurrentPosition();
+    const sol = state.solPriceUsd;
+    let livePnlSol = null, livePnlPct = null;
+    if (currentPosition && currentPosition.entryMarketCap > 0 && mc > 0) {
+      const unrealized = currentPosition.positionSizeSol * (mc / currentPosition.entryMarketCap - 1);
+      livePnlSol = unrealized + (currentPosition.realizedPnlSol || 0);
+      const initialSol = currentPosition.initialSizeSol || currentPosition.positionSizeSol;
+      livePnlPct = initialSol > 0 ? (livePnlSol / initialSol) * 100 : null;
+    } else if ((currentPosition?.realizedPnlSol || 0) !== 0 && currentPosition) {
+      livePnlSol = currentPosition.realizedPnlSol;
+    }
+    const pnlPctStr = livePnlPct !== null ? ` (${livePnlPct >= 0 ? "+" : ""}${livePnlPct.toFixed(1)}%)` : "";
+    const pnlStr = livePnlSol !== null
+      ? (sol ? (livePnlSol >= 0 ? "+" : "") + formatUsdValue(livePnlSol * sol) : (livePnlSol >= 0 ? "+" : "") + `${Math.abs(livePnlSol).toFixed(3)} SOL`) + pnlPctStr
+      : "—";
+    pnlEl.textContent = pnlStr;
+    pnlEl.className = `td-overlay-pos-value${livePnlSol !== null ? (livePnlSol >= 0 ? " is-pos" : " is-neg") : ""}`;
+  }
+
   function render() {
     if (!shouldShowOverlay()) {
       root.style.display = "none";
@@ -1366,29 +1389,29 @@
         : "—";
 
       posSummaryHtml = `
-        <div class="td-overlay-pos-summary">
-          <div class="td-overlay-pos-item">
+        <div style="display:flex;gap:10px;padding:6px 0;border-top:1px solid var(--td-border-subtle);border-bottom:1px solid var(--td-border-subtle);margin-bottom:4px">
+          <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">Invested</span>
             <span class="td-overlay-pos-value">${investedStr}</span>
           </div>
-          <div class="td-overlay-pos-item">
+          <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">Sold</span>
             <span class="td-overlay-pos-value">${soldStr}</span>
           </div>
-          <div class="td-overlay-pos-item">
+          <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">Remaining</span>
             <span class="td-overlay-pos-value">${remainingStr}</span>
           </div>
-          <div class="td-overlay-pos-item">
+          <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">PnL</span>
-            <span class="td-overlay-pos-value ${pnlClass}">${pnlStr}</span>
+            <span class="td-overlay-pos-value ${pnlClass}" data-live="pnl">${pnlStr}</span>
           </div>
           ${state.advancedTrading ? `
-          <div class="td-overlay-pos-item">
+          <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">Stop</span>
             <span class="td-overlay-pos-value">${formatThresholdLabel(currentPosition, "stop")}</span>
           </div>
-          <div class="td-overlay-pos-item">
+          <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">Target</span>
             <span class="td-overlay-pos-value">${formatThresholdLabel(currentPosition, "target")}</span>
           </div>` : ""}
@@ -1450,33 +1473,15 @@
       <div class="td-overlay-shell">
           ${state.status ? `<div class="td-overlay-toast td-overlay-toast--${state.statusTone}" data-dismiss-toast>${esc(state.status)}</div>` : ""}
           <div class="td-overlay-head">
-            <div style="display:flex;align-items:center;gap:4px">
-              <button class="td-overlay-icon-btn td-overlay-icon-btn-pos${state.posNavOpen ? " is-active" : ""}${!state.posNavOpen && hasOpenPositions ? " is-live" : ""}" type="button" data-pos-toggle aria-label="Toggle live trades">${listIcon}</button>
-              <button class="td-overlay-icon-btn" type="button" data-dashboard-link aria-label="Open dashboard">${statsIcon}</button>
-            </div>
-            <button class="td-overlay-balance" type="button" data-open-balance title="Open balance editor" aria-label="Open balance editor" style="display:flex;align-items:center;gap:5px">
+            <button class="td-overlay-balance" type="button" data-open-balance aria-label="Open balance editor" style="display:flex;align-items:center;gap:5px">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path fill-rule="evenodd" clip-rule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solG)"/><defs><linearGradient id="solG" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stop-color="#9945FF"/><stop offset="0.24" stop-color="#8752F3"/><stop offset="0.465" stop-color="#5497D5"/><stop offset="0.6" stop-color="#43B4CA"/><stop offset="0.735" stop-color="#28E0B9"/><stop offset="1" stop-color="#19FB9B"/></linearGradient></defs></svg>
               ${solBalanceLabel}
               <span class="td-overlay-balance-tip">Add more SOL</span>
             </button>
+            <button type="button" data-dashboard-link class="td-overlay-wordmark" title="Go to dashboard">POSTURE</button>
             <div class="td-overlay-head-actions">
-              <button class="td-overlay-icon-btn td-overlay-icon-btn-settings" type="button" data-open-settings aria-label="Account settings">${personIcon}</button>
-              ${state.settingsOpen ? `
-                <div class="td-overlay-settings-panel">
-                  <div class="td-overlay-settings-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--td-border-subtle)" data-toggle-advanced>
-                    <div>
-                      <div style="font-size:12px;font-weight:500;color:var(--td-text)">Advanced trading</div>
-                      <div style="font-size:10px;color:var(--td-text-faint);margin-top:1px">Stop loss &amp; target sell</div>
-                    </div>
-                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.advancedTrading ? "#4ade80" : "var(--td-text-faint)"}">${state.advancedTrading ? "ON" : "OFF"}</span>
-                  </div>
-                  <div class="td-overlay-settings-row" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;cursor:pointer" data-toggle-debug>
-                    <span style="font-size:11px;color:var(--td-text-dim)">Debug logging</span>
-                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.debugLogging ? "#4ade80" : "var(--td-text-faint)"}">${state.debugLogging ? "ON" : "OFF"}</span>
-                  </div>
-                  ${state.user ? `<button class="td-overlay-settings-signout" type="button" data-sign-out>Sign out</button>` : ""}
-                </div>
-              ` : ""}
+              <button class="td-overlay-icon-btn td-overlay-icon-btn-pos${state.posNavOpen ? " is-active" : ""}${!state.posNavOpen && hasOpenPositions ? " is-live" : ""}" type="button" data-pos-toggle aria-label="Toggle live trades" style="width:20px;height:20px">${listIcon}</button>
+              <button class="td-overlay-icon-btn td-overlay-icon-btn-settings${state.settingsOpen ? " is-active" : ""}" type="button" data-open-settings aria-label="Account settings">${personIcon}</button>
             </div>
           </div>
 
@@ -1517,27 +1522,30 @@
                   </div>
                 `;
               })()}
-              ${(() => {
-                const mc = dd.marketCapUsd;
-                const mcStr = mc ? (mc >= 1e9 ? `$${(mc/1e9).toFixed(2)}B` : mc >= 1e6 ? `$${(mc/1e6).toFixed(2)}M` : mc >= 1e3 ? `$${(mc/1e3).toFixed(0)}K` : `$${mc.toFixed(0)}`) : "";
-                const chg5m = dd.priceChange5m;
-                const chg1h = dd.priceChange1h;
-                const chgStr = chg5m !== null
-                  ? `<span style="color:${chg5m >= 0 ? "#4ade80" : "#f87171"}">${chg5m >= 0 ? "+" : ""}${chg5m.toFixed(1)}%</span><span style="color:var(--td-text-faint);font-size:9px"> 5m</span>`
-                  : chg1h !== null
-                  ? `<span style="color:${chg1h >= 0 ? "#4ade80" : "#f87171"}">${chg1h >= 0 ? "+" : ""}${chg1h.toFixed(1)}%</span><span style="color:var(--td-text-faint);font-size:9px"> 1h</span>`
-                  : "";
-                const ca = dd.contractAddress;
-                const shortCa = ca ? ca.slice(0, 4) + "…" + ca.slice(-4) : "";
-                return `<div class="td-overlay-coin-info">
-                  <div style="display:flex;align-items:center;gap:5px;min-width:0">
-                    <span class="td-overlay-coin-ticker">${esc(dd.tokenName)}</span>
-                    ${mcStr ? `<span class="td-overlay-coin-mc">${mcStr}</span>` : ""}
-                    ${chgStr ? `<span class="td-overlay-coin-chg">${chgStr}</span>` : ""}
+              ${state.settingsOpen ? `
+                <div class="td-overlay-label">Settings</div>
+                <div style="background:var(--td-card-bg);border:1px solid var(--td-card-border);border-radius:7px;overflow:hidden;margin-bottom:4px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--td-border-subtle)" data-toggle-advanced>
+                    <div>
+                      <div style="font-size:12px;font-weight:500;color:var(--td-text)">Advanced trading</div>
+                      <div style="font-size:10px;color:var(--td-text-faint);margin-top:1px">Stop loss &amp; target sell</div>
+                    </div>
+                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.advancedTrading ? "#4ade80" : "var(--td-text-faint)"}">${state.advancedTrading ? "ON" : "OFF"}</span>
                   </div>
-                  ${ca ? `<button class="td-overlay-pos-ca-copy" type="button" data-copy-ca="${esc(ca)}" title="Copy contract address">${esc(shortCa)} <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ""}
-                </div>`;
-              })()}
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--td-border-subtle)" data-toggle-debug>
+                    <span style="font-size:12px;color:var(--td-text-dim)">Debug logging</span>
+                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.debugLogging ? "#4ade80" : "var(--td-text-faint)"}">${state.debugLogging ? "ON" : "OFF"}</span>
+                  </div>
+                  ${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-out style="font:inherit;padding:0;border:none;background:none;font-size:12px;color:var(--td-text-faint);cursor:pointer">Sign out</button></div>` : ""}
+                </div>
+              ` : ""}
+              ${state.posNavOpen ? `<div style="height:1px;background:var(--td-border-subtle);margin:2px 0 4px"></div>` : ""}
+              ${currentPosition ? (() => {
+                const fullName = currentPosition.tokenFullName || dd.tokenFullName || "";
+                return `${fullName ? `<div class="td-overlay-pos-token-header"><span class="td-overlay-pos-token-fullname">${esc(fullName)}</span></div>` : ""}
+                ${posSummaryHtml}
+                ${automationControlsHtml}`;
+              })() : ""}
               <div class="td-overlay-label">Buy</div>
               <div class="td-overlay-preset-grid">
                 ${BUY_PRESETS.map(value => {
@@ -1549,19 +1557,7 @@
                     : button;
                 }).join("")}
               </div>
-
-              <div class="td-overlay-label">Sell</div>
-              ${currentPosition ? (() => {
-                const ca = currentPosition.contractAddress || dd.contractAddress || "";
-                const shortCa = ca ? ca.slice(0, 4) + "…" + ca.slice(-4) : "";
-                const fullName = currentPosition.tokenFullName || dd.tokenFullName || "";
-                return `<div class="td-overlay-pos-token-header">
-                  ${fullName ? `<span class="td-overlay-pos-token-fullname">${esc(fullName)}</span>` : ""}
-                  ${ca ? `<button class="td-overlay-pos-ca-copy" type="button" data-copy-ca="${esc(ca)}" title="Copy contract address">${esc(shortCa)} <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ""}
-                </div>`;
-              })() : ""}
-              ${posSummaryHtml}
-              ${automationControlsHtml}
+              <div class="td-overlay-label" style="margin-top:6px">Sell</div>
               <div class="td-overlay-sell-stack">
                 <div class="td-overlay-sell-grid">
                   ${SELL_PRESETS.map(percent => `<button class="td-overlay-pill td-overlay-pill-sell" type="button" data-sell-percent="${percent}" ${currentPosition ? "" : "disabled"}>${percent}%</button>`).join("")}
@@ -1587,7 +1583,10 @@
       const ca = el.dataset.copyCa;
       if (!ca) return;
       navigator.clipboard.writeText(ca).then(() => {
-        setStatus("CA copied.", "neutral");
+        clearTimeout(state._caCopyTimer);
+        state.caCopiedUntil = Date.now() + 1100;
+        render();
+        state._caCopyTimer = setTimeout(() => render(), 1100);
       }).catch(() => {});
     }));
 
@@ -1615,16 +1614,6 @@
       state.settingsOpen = !state.settingsOpen;
       render();
     }));
-
-    if (state.settingsOpen) {
-      const closeSettings = e => {
-        if (!root.querySelector(".td-overlay-settings-panel")?.contains(e.target)) {
-          state.settingsOpen = false;
-          render();
-        }
-      };
-      setTimeout(() => document.addEventListener("click", closeSettings, { once: true }), 0);
-    }
 
     root.querySelector("[data-sign-out]")?.addEventListener("click", async () => {
       await signOutCurrentUser();
@@ -1928,11 +1917,9 @@
   }
 
   async function boot() {
-    injectSocketHook();
     window.addEventListener("message", event => {
       if (event.source !== window) return;
       if (event.data?.source !== "td-axiom-socket") return;
-      if (event.data?.nonce !== SOCKET_NONCE) return;
       handleSocketPayload(event.data.payload);
     });
 
@@ -1976,7 +1963,7 @@
 
     function refreshPageSnapshot() {
       const nextSnapshot = detectPageSnapshot();
-      const nextKey = `${location.href}|${nextSnapshot.tokenName}|${nextSnapshot.marketCap || ""}|${nextSnapshot.isCoinPage}`;
+      const nextKey = `${location.href}|${nextSnapshot.tokenName}|${nextSnapshot.isCoinPage}`;
       if (nextKey === lastPageKey) return;
       const prevDetected = state.detected;
       lastPageKey = nextKey;
@@ -1991,10 +1978,20 @@
         prevDetected?.tokenName !== nextSnapshot.tokenName
       );
       if (coinChanged) {
+        clearTimeout(state._caCopyTimer);
+        state.caCopiedUntil = 0;
+        state._wsRefPrice = null;
+        stopDexPoll();
         void loadOpenPositionsFromBackend().then(() => renderUnlessEditing()).catch(() => {});
-        if (nextSnapshot.pairAddress) void fetchDexScreenerPairInfo(nextSnapshot.pairAddress);
+        const pairAddr = nextSnapshot.pairAddress;
+        const tokenAddr = nextSnapshot.contractAddress;
+        if (pairAddr) {
+          void fetchDexScreenerPairInfo(pairAddr).then(() => startDexPoll(pairAddr));
+        } else if (tokenAddr) {
+          void fetchDexScreenerByToken(tokenAddr);
+        }
       } else if (nextSnapshot.pairAddress && nextSnapshot.pairAddress !== lastDexFetchPairAddress) {
-        void fetchDexScreenerPairInfo(nextSnapshot.pairAddress);
+        void fetchDexScreenerPairInfo(nextSnapshot.pairAddress).then(() => startDexPoll(nextSnapshot.pairAddress));
       }
     }
 

@@ -9,6 +9,26 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport json, sys\nd = json.load(sys.stdin)\nf = d.get('file_path', '')\nif any(s in f for s in ['overlay.js', 'api.js']):\n    print(json.dumps({'decision': 'approve', 'systemMessage': 'REMINDER: This file is part of the extension/dashboard contract. If the __TD_OPEN__ payload shape is involved, also update the paired file (overlay.js <-> api.js).'})) \nelse:\n    print(json.dumps({'decision': 'approve'}))\n\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport json, sys\nd = json.load(sys.stdin)\nf = d.get('file_path', '')\nif f.endswith('.env') and not f.endswith('.env.example'):\n    print(json.dumps({'decision': 'block', 'reason': '.env files must not be overwritten by Claude.'}))\nelse:\n    print(json.dumps({'decision': 'approve'}))\n\""
+          }
+        ]
+      }
     ]
   }
 }

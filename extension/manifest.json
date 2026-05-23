@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Posture",
   "description": "Trade with discipline. Overlay for Axiom that syncs with your Posture account.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "permissions": [
     "storage",
     "tabs",
@@ -20,6 +20,17 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*"
+      ],
+      "js": [
+        "socket-hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://axiom.trade/*",
