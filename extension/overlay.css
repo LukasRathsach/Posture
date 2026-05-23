@@ -1,5 +1,5 @@
 .td-overlay-root {
-  --td-bg: rgba(12, 13, 16, 0.97);
+  --td-bg: rgba(12, 13, 16, 1);
   --td-border: rgba(255, 255, 255, 0.12);
   --td-border-subtle: rgba(255, 255, 255, 0.08);
   --td-card-bg: rgba(255, 255, 255, 0.03);
@@ -30,7 +30,7 @@
 }
 
 .td-overlay-root.is-light {
-  --td-bg: rgba(248, 250, 252, 0.98);
+  --td-bg: rgba(248, 250, 252, 1);
   --td-border: rgba(15, 23, 42, 0.12);
   --td-border-subtle: rgba(15, 23, 42, 0.08);
   --td-card-bg: rgba(15, 23, 42, 0.03);

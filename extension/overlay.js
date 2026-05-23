@@ -45,7 +45,6 @@
   const FEE_PER_TRADE = 0.01;
   const BUY_PRESETS = [0.1, 0.2, 0.4, 1];
   const SELL_PRESETS = [10, 25, 50, 100];
-  const DEBUG_LOGGING_KEY = "td_debug_logging";
   const ADVANCED_TRADING_KEY = "td_advanced_trading";
   const CLOSE_QUEUE_KEY = "td_close_queue";
 
@@ -74,7 +73,6 @@
     bgPrice: null,
     darkTheme: true,
     automationDrafts: {},
-    debugLogging: false,
     advancedTrading: false,
     caCopiedUntil: 0,
   };
@@ -141,12 +139,7 @@
   }
 
   function debugLog(...args) {
-    if (!state.debugLogging) return;
     console.log("[Posture]", ...args);
-  }
-
-  async function saveDebugLogging() {
-    await storage.set({ [DEBUG_LOGGING_KEY]: state.debugLogging });
   }
 
   async function saveAdvancedTrading() {
@@ -520,6 +513,7 @@
         entryMarketCap: Number(snapshot.marketCap),
         positionSizeSol: addSize,
         initialSizeSol: addSize,
+        totalFeesSol: FEE_PER_TRADE,
         openedAt,
         pageUrl: snapshot.pageUrl,
         marketCapSource: snapshot.marketCapSource || "unknown",
@@ -553,6 +547,7 @@
       entryMarketCap: Number(weightedEntryMarketCap.toFixed(2)),
       positionSizeSol: nextPositionSizeSol,
       initialSizeSol: nextInitialSizeSol,
+      totalFeesSol: Number(((current.totalFeesSol || 0) + FEE_PER_TRADE).toFixed(4)),
       pageUrl: snapshot.pageUrl || current.pageUrl || "",
       marketCapSource: snapshot.marketCapSource || current.marketCapSource || "unknown",
       contractAddress: snapshot.contractAddress || current.contractAddress || "",
@@ -1312,13 +1307,14 @@
     const currentPosition = getCurrentPosition();
     const sol = state.solPriceUsd;
     let livePnlSol = null, livePnlPct = null;
+    const totalFees = currentPosition?.totalFeesSol || 0;
     if (currentPosition && currentPosition.entryMarketCap > 0 && mc > 0) {
       const unrealized = currentPosition.positionSizeSol * (mc / currentPosition.entryMarketCap - 1);
-      livePnlSol = unrealized + (currentPosition.realizedPnlSol || 0);
+      livePnlSol = unrealized + (currentPosition.realizedPnlSol || 0) - totalFees;
       const initialSol = currentPosition.initialSizeSol || currentPosition.positionSizeSol;
       livePnlPct = initialSol > 0 ? (livePnlSol / initialSol) * 100 : null;
     } else if ((currentPosition?.realizedPnlSol || 0) !== 0 && currentPosition) {
-      livePnlSol = currentPosition.realizedPnlSol;
+      livePnlSol = (currentPosition.realizedPnlSol || 0) - totalFees;
     }
     const pnlPctStr = livePnlPct !== null ? ` (${livePnlPct >= 0 ? "+" : ""}${livePnlPct.toFixed(1)}%)` : "";
     const pnlStr = livePnlSol !== null
@@ -1348,14 +1344,15 @@
     let livePnlPct = null;
     let livePnlSol = null;
     const realizedPnl = currentPosition?.realizedPnlSol || 0;
+    const totalFees = currentPosition?.totalFeesSol || 0;
     const liveMC = getEstimatedLiveMarketCapUsd() || state.detected?.marketCap;
     if (currentPosition && currentPosition.entryMarketCap > 0 && liveMC > 0) {
       const unrealizedPnl = currentPosition.positionSizeSol * (liveMC / currentPosition.entryMarketCap - 1);
-      livePnlSol = unrealizedPnl + realizedPnl;
+      livePnlSol = unrealizedPnl + realizedPnl - totalFees;
       const initialSol = currentPosition.initialSizeSol || currentPosition.positionSizeSol;
       livePnlPct = initialSol > 0 ? (livePnlSol / initialSol) * 100 : null;
     } else if (realizedPnl !== 0 && currentPosition) {
-      livePnlSol = realizedPnl;
+      livePnlSol = realizedPnl - totalFees;
       const initialSol = currentPosition.initialSizeSol || currentPosition.positionSizeSol;
       livePnlPct = initialSol > 0 ? (livePnlSol / initialSol) * 100 : null;
     }
@@ -1532,11 +1529,7 @@
                     </div>
                     <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.advancedTrading ? "#4ade80" : "var(--td-text-faint)"}">${state.advancedTrading ? "ON" : "OFF"}</span>
                   </div>
-                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--td-border-subtle)" data-toggle-debug>
-                    <span style="font-size:12px;color:var(--td-text-dim)">Debug logging</span>
-                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.debugLogging ? "#4ade80" : "var(--td-text-faint)"}">${state.debugLogging ? "ON" : "OFF"}</span>
-                  </div>
-                  ${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-out style="font:inherit;padding:0;border:none;background:none;font-size:12px;color:var(--td-text-faint);cursor:pointer">Sign out</button></div>` : ""}
+${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-out style="font:inherit;padding:0;border:none;background:none;font-size:12px;color:var(--td-text-faint);cursor:pointer">Sign out</button></div>` : ""}
                 </div>
               ` : ""}
               ${state.posNavOpen ? `<div style="height:1px;background:var(--td-border-subtle);margin:2px 0 4px"></div>` : ""}
@@ -1628,13 +1621,7 @@
       render();
     });
 
-    root.querySelector("[data-toggle-debug]")?.addEventListener("click", async () => {
-      state.debugLogging = !state.debugLogging;
-      await saveDebugLogging();
-      render();
-    });
-
-    root.querySelector("[data-refresh]")?.addEventListener("click", () => {
+root.querySelector("[data-refresh]")?.addEventListener("click", () => {
       state.detected = detectPageSnapshot();
       render();
     });
@@ -1674,14 +1661,17 @@
           }
           const rawSnapshot = detectPageSnapshot();
           const dex = state.dexData?.pairAddress === (rawSnapshot.pairAddress || state.dexData?.pairAddress) ? state.dexData : null;
+          // Use live MC (DexScreener+WS) for entry capture — same source as the overlay's live display.
+          // DOM MC is used only as last resort since Axiom's DOM can show stale data on page load.
+          const liveMCForEntry = getEstimatedLiveMarketCapUsd();
           const snapshot = {
             ...rawSnapshot,
             tokenName: dex?.symbol || rawSnapshot.tokenName,
             tokenFullName: dex?.name || rawSnapshot.tokenFullName || null,
             contractAddress: dex?.contractAddress || rawSnapshot.contractAddress || "",
             pairAddress: dex?.pairAddress || rawSnapshot.pairAddress || "",
-            marketCap: rawSnapshot.marketCap || dex?.marketCapUsd || null,
-            marketCapSource: rawSnapshot.marketCap ? rawSnapshot.marketCapSource : (dex ? "dex-seed" : rawSnapshot.marketCapSource),
+            marketCap: liveMCForEntry || dex?.marketCapUsd || rawSnapshot.marketCap || null,
+            marketCapSource: liveMCForEntry ? "live-mc" : (rawSnapshot.marketCap ? rawSnapshot.marketCapSource : (dex ? "dex-seed" : rawSnapshot.marketCapSource)),
           };
           state.detected = snapshot;
           sentryCrumb("trade", "BUY attempted", { token: snapshot.tokenName, ca: snapshot.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, size });
@@ -1805,7 +1795,8 @@
       }
       const positionSizeSol = Number(current.positionSizeSol || 0) * fraction;
       const pnlPercentage = ((snapshot.marketCap / current.entryMarketCap) - 1) * 100;
-      const pnlSol = positionSizeSol * (pnlPercentage / 100);
+      // pnlSol includes exit fee so displayed P&L reflects true cost
+      const pnlSol = positionSizeSol * (pnlPercentage / 100) - FEE_PER_TRADE;
       const closeMeta = {
         trigger: options.trigger || "manual",
         reason: options.reason || "manual",
@@ -1855,6 +1846,7 @@
           ...current,
           positionSizeSol: remainingPositionSizeSol,
           realizedPnlSol: Number(((current.realizedPnlSol || 0) + pnlSol).toFixed(6)),
+          totalFeesSol: Number(((current.totalFeesSol || 0) + FEE_PER_TRADE).toFixed(4)),
           lastCapture: createCaptureMeta(snapshot),
           events: appendPositionEvent(current, closeEvent),
         };
@@ -1865,7 +1857,7 @@
         }
       }
 
-      const returnedSol = positionSizeSol + pnlSol - FEE_PER_TRADE;
+      const returnedSol = positionSizeSol + pnlSol;
       state.virtualBalance = Number((state.virtualBalance + Math.max(0, returnedSol)).toFixed(4));
       await saveVirtualBalance();
       await saveOpenPositions();
@@ -1934,7 +1926,7 @@
       });
     }
 
-    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, VIRTUAL_BALANCE_KEY, BG_PRICE_KEY, OVERLAY_DARK_THEME_KEY, DEBUG_LOGGING_KEY, ADVANCED_TRADING_KEY]);
+    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, VIRTUAL_BALANCE_KEY, BG_PRICE_KEY, OVERLAY_DARK_THEME_KEY, ADVANCED_TRADING_KEY]);
     state.session = stored.td_session || null;
     state.openPositions = stored[OPEN_POSITIONS_KEY] || {};
     state.enabled = stored[EXTENSION_ENABLED_KEY] !== false;
@@ -1943,7 +1935,6 @@
     state.virtualBalance = Number(stored[VIRTUAL_BALANCE_KEY] || 0);
     state.bgPrice = stored[BG_PRICE_KEY] || null;
     state.darkTheme = stored[OVERLAY_DARK_THEME_KEY] !== false;
-    state.debugLogging = stored[DEBUG_LOGGING_KEY] === true;
     state.advancedTrading = stored[ADVANCED_TRADING_KEY] === true;
     state.detected = detectPageSnapshot();
 
@@ -2133,11 +2124,7 @@
         state.darkTheme = changes[OVERLAY_DARK_THEME_KEY].newValue !== false;
         renderUnlessEditing();
       }
-      if (changes[DEBUG_LOGGING_KEY]) {
-        state.debugLogging = changes[DEBUG_LOGGING_KEY].newValue === true;
-        renderUnlessEditing();
-      }
-      if (changes[ADVANCED_TRADING_KEY]) {
+if (changes[ADVANCED_TRADING_KEY]) {
         state.advancedTrading = changes[ADVANCED_TRADING_KEY].newValue === true;
         renderUnlessEditing();
       }
