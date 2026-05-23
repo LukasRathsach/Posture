@@ -454,11 +454,6 @@ The bar is: every interaction feels instant and correct, nothing fails silently,
 - [x] Balance race condition fixed — done 2026-05-23: `lastLocalBalanceEdit` guard in App.jsx prevents stale `request_balance` responses from overwriting a freshly edited balance; overlay.js re-reads from chrome.storage on `visibilitychange`
 
 **UI — sharp, nothing in the way**
-- [x] Position summary layout: 4-col grid, Stop loss / Target sell in second row — done 2026-05-23
-- [x] Stop loss UX: accepts negative %, inline mode buttons, no toast on trigger — done 2026-05-23
-- [x] Automation controls moved below Sell section — done 2026-05-23
-- [x] Tooltips no longer clipped by extension shell (`overflow: visible` + toast `border-radius`) — done 2026-05-23
-- [x] Toast bar: errors only, no informational toasts — done 2026-05-23
 - [ ] Buy/sell panel: tighter padding, slimmer inputs
 - [ ] Position row: live P&L is the dominant element; entry MC and size are secondary
 - [ ] Sell buttons: clear visual hierarchy (25% / 50% / 100%)
