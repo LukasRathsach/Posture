@@ -40,6 +40,12 @@ All universal skills (ui-ux-pro-max, react-best-practices, javascript-mastery, e
 - Update local state before Supabase in any sell/close operation
 - Update `extension/overlay.js` AND `src/api.js` together if the `__TD_OPEN__` note payload shape changes
 
+## Versioning
+
+Extension version lives in `extension/manifest.json`. Bump it on every meaningful release.
+Use semver where the version number reflects real scope: `0.x.0` for new features, `0.x.y` for fixes.
+Current: `0.2.0`. Next feature release: `0.3.0`.
+
 ## Stack
 
 - React 18 + Vite (single `App.jsx` component — intentional, do not split)
