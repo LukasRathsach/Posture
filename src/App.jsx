@@ -38,67 +38,8 @@ const LOCAL_STORAGE_KEY = "trading-dashboard-sessions";
 
 const ACCENT_PRESETS = [
   {
-    key: "polaris",
-    label: "Polaris",
-    base: "#005bd3",
-    dim: "#004299",
-    rgb: "0,91,211",
-    swatch: "linear-gradient(135deg, #f7f7f7 0%, #ffffff 48%, #005bd3 48%, #005bd3 100%)",
-    dark: {
-      bg: "#1a1a1a",
-      headerBg: "rgba(26,26,26,0.92)",
-      surface1: "#202020",
-      surface2: "#262626",
-      surface3: "#303030",
-      border: "rgba(227,227,227,0.13)",
-      borderSub: "rgba(227,227,227,0.08)",
-      text: "#f1f1f1",
-      textMid: "#cccccc",
-      textDim: "#8a8a8a",
-      modalBg: "rgba(26,26,26,0.96)",
-      modalSurf: "#202020",
-      inp: { bg: "#262626", border: "rgba(227,227,227,0.14)", color: "#f1f1f1" },
-      calWin: { bg: "#0b2b25", border: "#047b5d" },
-      calBigWin: { bg: "#332e00", border: "#998a00", text: "#ffeb78" },
-      calLoss: { bg: "#3b0710", border: "#8e0b21" },
-    },
-    light: {
-      bg: "#f1f1f1",
-      surface1: "#ffffff",
-      surface2: "#f7f7f7",
-      surface3: "#ebebeb",
-      border: "#e3e3e3",
-      borderSub: "#ebebeb",
-      text: "#303030",
-      textMid: "#616161",
-      textDim: "#8a8a8a",
-      modalBg: "#ffffff",
-      modalSurf: "#ffffff",
-      inp: { bg: "#ffffff", border: "#cccccc", color: "#303030" },
-      calWin: { bg: "#e3fff1", border: "#047b5d" },
-      calBigWin: { bg: "#fff8db", border: "#b98900", text: "#5e4200" },
-      calLoss: { bg: "#fff1f3", border: "#c70a24" },
-    },
-  },
-  {
     key: "axiom", label: "Axiom", base: "#50ff6c", dim: "#3de858", rgb: "80,255,108", swatch: "#0C0D10",
     dark: { bg: "#0C0D10", headerBg: "rgba(12,13,16,0.92)", surface1: "#0C0D10", surface2: "#111214", surface3: "#131416", border: "rgba(255,255,255,0.10)", borderSub: "rgba(255,255,255,0.07)", inp: { bg: "rgba(0,0,0,0.22)", border: "rgba(255,255,255,0.10)", color: "#F3F4F6" } },
-  },
-  {
-    key: "amber", label: "Amber", base: "#F59E0B", dim: "#D97706", rgb: "245,158,11",
-    dark: { bg: "#0F172A", headerBg: "rgba(15,23,42,0.82)", surface1: "#1E293B", surface2: "#162033", surface3: "#0F1929", border: "#334155", borderSub: "#1E293B", inp: { bg: "#1E293B", border: "#334155", color: "#F8FAFC" } },
-  },
-  {
-    key: "teal", label: "Teal", base: "#14B8A6", dim: "#0D9488", rgb: "20,184,166",
-    dark: { bg: "#061516", headerBg: "rgba(6,21,22,0.82)", surface1: "#0C2426", surface2: "#081B1D", surface3: "#051012", border: "#165054", borderSub: "#0C2426", inp: { bg: "#0C2426", border: "#165054", color: "#F8FAFC" } },
-  },
-  {
-    key: "violet", label: "Violet", base: "#8B5CF6", dim: "#7C3AED", rgb: "139,92,246",
-    dark: { bg: "#0D0B18", headerBg: "rgba(13,11,24,0.82)", surface1: "#17132A", surface2: "#110F21", surface3: "#0A0815", border: "#2C2350", borderSub: "#17132A", inp: { bg: "#17132A", border: "#2C2350", color: "#F8FAFC" } },
-  },
-  {
-    key: "rose", label: "Rose", base: "#F43F5E", dim: "#E11D48", rgb: "244,63,94",
-    dark: { bg: "#130810", headerBg: "rgba(19,8,16,0.82)", surface1: "#221018", surface2: "#1A0C15", surface3: "#0F060C", border: "#3D1425", borderSub: "#221018", inp: { bg: "#221018", border: "#3D1425", color: "#F8FAFC" } },
   },
 ];
 
@@ -192,16 +133,19 @@ export default function App() {
   const [balanceHover, setBalanceHover] = useState(false);
   const [streakHover, setStreakHover] = useState(false);
   const settingsWrapperRef = useRef(null);
+  const lastLocalBalanceEdit = useRef(0);
 
   const syncVirtualBalance = nextValue => {
     const normalized = Math.max(0, Number(nextValue || 0));
     const rounded = Number(normalized.toFixed(4));
+    lastLocalBalanceEdit.current = Date.now();
     setVirtualBalance(rounded);
     localStorage.setItem("posture_virtual_balance", String(rounded));
     window.postMessage({ source: "posture-page", type: "balance_update", value: rounded }, "*");
   };
 
   const resetVirtualBalance = () => {
+    lastLocalBalanceEdit.current = Date.now();
     setVirtualBalance(0);
     localStorage.removeItem("posture_virtual_balance");
     window.postMessage({ source: "posture-page", type: "reset_balance" }, "*");
@@ -472,6 +416,10 @@ export default function App() {
         try { await setSessionFromTokens(access_token, refresh_token); } catch (_) {}
       },
       onInjectBalance: next => {
+        // Ignore incoming sync for 2s after a local edit — prevents stale
+        // chrome.storage reads (from request_balance on focus) from overwriting
+        // a balance the user just changed.
+        if (Date.now() - lastLocalBalanceEdit.current < 2000) return;
         if (next === null || next === undefined) {
           setVirtualBalance(0);
           localStorage.removeItem("posture_virtual_balance");
@@ -2109,17 +2057,6 @@ export default function App() {
   // ── Settings panel ────────────────────────────────────────────────────────
   const settingsPanel = settingsPanelOpen && (
     <div className="ui-panel-pop" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 264, background: tk.modalSurf, border: `1px solid ${tk.border}`, borderRadius: isPolarisTheme ? polaris.radius.modal : 10, boxShadow: isPolarisTheme ? polaris.popShadow : (dark ? "0 12px 32px rgba(0,0,0,0.28)" : "0 12px 28px rgba(15,23,42,0.12)"), padding: 12, zIndex: 200, fontFamily: sans, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div>
-        <div style={{ fontSize: 10, color: tk.textDim, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 8 }}>Theme</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
-          {ACCENT_PRESETS.map(p => (
-            <button key={p.key} title={p.label || p.key} onClick={() => { setAccentKey(p.key); localStorage.setItem("posture_accent_key", p.key); }} style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, height: 32, borderRadius: isPolarisTheme ? polaris.radius.control : 8, background: accentKey === p.key ? (isPolarisTheme ? (dark ? "rgba(0,91,211,0.18)" : "#ebf1ff") : (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)")) : "transparent", border: `1px solid ${accentKey === p.key ? accent : tk.borderSub}`, outline: "none", cursor: "pointer", padding: "0 8px", color: accentKey === p.key ? tk.text : tk.textMid, fontSize: 12, fontWeight: 650, fontFamily: sans, textAlign: "left" }}>
-              <span style={{ width: 16, height: 16, borderRadius: "50%", background: p.swatch || p.base, border: `1px solid ${dark ? "rgba(255,255,255,0.24)" : "rgba(0,0,0,0.18)"}`, flexShrink: 0 }} />
-              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label || p.key}</span>
-            </button>
-          ))}
-        </div>
-      </div>
       {authUser && (
         <div style={{ borderTop: `1px solid ${tk.border}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
           <button className="ui-interactive-button" onClick={async () => { await signOutUser(); setSettingsPanelOpen(false); }} style={{ background: "none", border: `1px solid ${tk.border}`, borderRadius: isPolarisTheme ? polaris.radius.control : 7, padding: "6px 10px", fontSize: 12, color: tk.textMid, cursor: "pointer", fontFamily: sans, textAlign: "left" }}>Sign out</button>

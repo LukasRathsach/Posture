@@ -45,8 +45,11 @@
   const FEE_PER_TRADE = 0.01;
   const BUY_PRESETS = [0.1, 0.2, 0.4, 1];
   const SELL_PRESETS = [10, 25, 50, 100];
-  const ADVANCED_TRADING_KEY = "td_advanced_trading";
+  const STOP_LOSS_ENABLED_KEY = "td_stop_loss_enabled";
+  const TARGET_SELL_ENABLED_KEY = "td_target_sell_enabled";
+  const SIMULATION_SETTINGS_KEY = "td_simulation_settings";
   const CLOSE_QUEUE_KEY = "td_close_queue";
+  const SIM_DEFAULTS = { slippagePct: null, execDelayMs: null };
 
   const state = {
     session: null,
@@ -73,7 +76,9 @@
     bgPrice: null,
     darkTheme: true,
     automationDrafts: {},
-    advancedTrading: false,
+    stopLossEnabled: false,
+    simSettings: { ...SIM_DEFAULTS },
+    tradeStatus: null,
     caCopiedUntil: 0,
   };
 
@@ -142,8 +147,42 @@
     console.log("[Posture]", ...args);
   }
 
-  async function saveAdvancedTrading() {
-    await storage.set({ [ADVANCED_TRADING_KEY]: state.advancedTrading });
+  async function saveFeatureToggles() {
+    await storage.set({ [STOP_LOSS_ENABLED_KEY]: state.stopLossEnabled });
+  }
+
+  async function saveSimSettings() {
+    await storage.set({ [SIMULATION_SETTINGS_KEY]: state.simSettings });
+  }
+
+  // Returns a fill-price multiplier simulating Axiom/Solana slippage.
+  // side="buy" → entry MC is inflated (you pay more); side="sell" → exit MC is deflated.
+  function getSlippageMultiplier(sizeSol, side) {
+    const custom = state.simSettings?.slippagePct;
+    let pct;
+    if (custom != null && custom >= 0) {
+      pct = custom / 100;
+    } else {
+      const base = 0.015;
+      const sizeImpact = Math.min(sizeSol * 0.02, 0.03);
+      const variance = (Math.random() - 0.5) * 0.01;
+      pct = Math.max(0, base + sizeImpact + variance);
+    }
+    return side === "buy" ? 1 + pct : 1 - pct;
+  }
+
+  // Simulates Solana transaction confirmation latency.
+  // Auto mode: 400–1200ms base, 15% congestion path up to ~2800ms.
+  async function simulateExecDelay() {
+    const custom = state.simSettings?.execDelayMs;
+    let ms;
+    if (custom != null && custom >= 0) {
+      ms = custom;
+    } else {
+      ms = 400 + Math.random() * 800;
+      if (Math.random() < 0.15) ms += 1100 + Math.random() * 1300;
+    }
+    if (ms > 0) await new Promise(r => setTimeout(r, ms));
   }
 
   function getDashboardBalanceUrl() {
@@ -398,7 +437,7 @@
   function normalizeStopLossPct(value) {
     if (value === null || value === undefined || value === "") return null;
     const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    if (!Number.isFinite(parsed) || parsed === 0) return null;
     return -Math.abs(Number(parsed.toFixed(2)));
   }
 
@@ -429,7 +468,7 @@
       targetSellMode,
       stopLoss: stopLossMode === "mc"
         ? (position.stopLossMarketCap ? String(position.stopLossMarketCap) : "")
-        : (position.stopLossPct ? String(Math.abs(position.stopLossPct)) : ""),
+        : (position.stopLossPct ? String(position.stopLossPct) : ""),
       targetSell: targetSellMode === "mc"
         ? (position.targetSellMarketCap ? String(position.targetSellMarketCap) : "")
         : (position.targetSellPct ? String(position.targetSellPct) : ""),
@@ -454,7 +493,7 @@
     return Boolean(
       activeElement &&
       root.contains(activeElement) &&
-      activeElement.matches?.("[data-stop-loss-input], [data-target-sell-input]")
+      activeElement.matches?.("input, textarea, select")
     );
   }
 
@@ -470,7 +509,7 @@
       if ((position.stopLossMode || "pct") === "mc") {
         return position.stopLossMarketCap ? `${formatCompactUsd(position.stopLossMarketCap)} MC` : "—";
       }
-      return position.stopLossPct ? `${Math.abs(position.stopLossPct).toFixed(1)}%` : "—";
+      return position.stopLossPct ? `-${Math.abs(position.stopLossPct).toFixed(1)}%` : "—";
     }
     if ((position.targetSellMode || "pct") === "mc") {
       return position.targetSellMarketCap ? `${formatCompactUsd(position.targetSellMarketCap)} MC` : "—";
@@ -1298,7 +1337,7 @@
 
   function patchLiveData() {
     if (!shouldShowOverlay()) return;
-    if (!root.querySelector('[data-live]')) { renderUnlessEditing(); return; }
+    if (!root.querySelector('[data-live]')) return;
 
     const mc = getEstimatedLiveMarketCapUsd() || state.dexData?.marketCapUsd || state.detected?.marketCap || null;
 
@@ -1385,8 +1424,11 @@
         ? (sol ? (livePnlSol >= 0 ? "+" : "") + formatUsdValue(livePnlSol * sol) : (livePnlSol >= 0 ? "+" : "") + fmtSol(Math.abs(livePnlSol))) + pnlPctStr
         : "—";
 
+      const stopLabel = state.stopLossEnabled ? formatThresholdLabel(currentPosition, "stop") : null;
+      const targetLabel = state.stopLossEnabled ? formatThresholdLabel(currentPosition, "target") : null;
+      const showStopTargetRow = state.stopLossEnabled && (stopLabel !== "—" || targetLabel !== "—");
       posSummaryHtml = `
-        <div style="display:flex;gap:10px;padding:6px 0;border-top:1px solid var(--td-border-subtle);border-bottom:1px solid var(--td-border-subtle);margin-bottom:4px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px 0;padding:6px 0;${showStopTargetRow ? "" : "border-bottom:1px solid var(--td-border-subtle);"}margin-bottom:${showStopTargetRow ? "0" : "4px"}">
           <div style="display:flex;flex-direction:column;gap:2px">
             <span class="td-overlay-pos-label">Invested</span>
             <span class="td-overlay-pos-value">${investedStr}</span>
@@ -1403,39 +1445,41 @@
             <span class="td-overlay-pos-label">PnL</span>
             <span class="td-overlay-pos-value ${pnlClass}" data-live="pnl">${pnlStr}</span>
           </div>
-          ${state.advancedTrading ? `
+        </div>
+        ${showStopTargetRow ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px 0;padding:5px 0;border-bottom:1px solid var(--td-border-subtle);margin-bottom:4px">
           <div style="display:flex;flex-direction:column;gap:2px">
-            <span class="td-overlay-pos-label">Stop</span>
-            <span class="td-overlay-pos-value">${formatThresholdLabel(currentPosition, "stop")}</span>
+            <span class="td-overlay-pos-label">Stop loss</span>
+            <span class="td-overlay-pos-value">${stopLabel}</span>
           </div>
           <div style="display:flex;flex-direction:column;gap:2px">
-            <span class="td-overlay-pos-label">Target</span>
-            <span class="td-overlay-pos-value">${formatThresholdLabel(currentPosition, "target")}</span>
-          </div>` : ""}
-        </div>
+            <span class="td-overlay-pos-label">Target sell</span>
+            <span class="td-overlay-pos-value">${targetLabel}</span>
+          </div>
+        </div>` : ""}
       `;
-      if (state.advancedTrading) automationControlsHtml = `
+      if (state.stopLossEnabled) automationControlsHtml = `
         <div class="td-overlay-automation">
           <div class="td-overlay-automation-row">
             <div class="td-overlay-automation-field">
-              <div class="td-overlay-automation-field-head">
-                <span class="td-overlay-pos-label">Stop</span>
-                <div class="td-overlay-automation-modes" data-stop-loss-modes>
+              <span class="td-overlay-pos-label" style="margin-bottom:3px;display:block">Stop</span>
+              <div style="display:flex;align-items:center;gap:4px">
+                <input class="td-overlay-input td-overlay-automation-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${automationDraft.stopLossMode === "mc" ? "e.g. 50k" : "e.g. -20"}" value="${esc(automationDraft.stopLoss)}" data-stop-loss-input style="flex:1;min-width:0" />
+                <div class="td-overlay-automation-modes" data-stop-loss-modes style="flex-shrink:0">
                   <button class="td-overlay-automation-mode${automationDraft.stopLossMode !== "mc" ? " is-active" : ""}" type="button" data-stop-loss-mode="pct">%</button>
                   <button class="td-overlay-automation-mode${automationDraft.stopLossMode === "mc" ? " is-active" : ""}" type="button" data-stop-loss-mode="mc">MC</button>
                 </div>
               </div>
-              <input class="td-overlay-input td-overlay-automation-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${automationDraft.stopLossMode === "mc" ? "Stop MC" : "Stop %"}" value="${esc(automationDraft.stopLoss)}" data-stop-loss-input />
             </div>
             <div class="td-overlay-automation-field">
-              <div class="td-overlay-automation-field-head">
-                <span class="td-overlay-pos-label">Target</span>
-                <div class="td-overlay-automation-modes" data-target-sell-modes>
+              <span class="td-overlay-pos-label" style="margin-bottom:3px;display:block">Target</span>
+              <div style="display:flex;align-items:center;gap:4px">
+                <input class="td-overlay-input td-overlay-automation-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${automationDraft.targetSellMode === "mc" ? "Target MC" : "Target %"}" value="${esc(automationDraft.targetSell)}" data-target-sell-input style="flex:1;min-width:0" />
+                <div class="td-overlay-automation-modes" data-target-sell-modes style="flex-shrink:0">
                   <button class="td-overlay-automation-mode${automationDraft.targetSellMode !== "mc" ? " is-active" : ""}" type="button" data-target-sell-mode="pct">%</button>
                   <button class="td-overlay-automation-mode${automationDraft.targetSellMode === "mc" ? " is-active" : ""}" type="button" data-target-sell-mode="mc">MC</button>
                 </div>
               </div>
-              <input class="td-overlay-input td-overlay-automation-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${automationDraft.targetSellMode === "mc" ? "Target MC" : "Target %"}" value="${esc(automationDraft.targetSell)}" data-target-sell-input />
             </div>
           </div>
         </div>
@@ -1468,14 +1512,14 @@
 
     root.innerHTML = `
       <div class="td-overlay-shell">
-          ${state.status ? `<div class="td-overlay-toast td-overlay-toast--${state.statusTone}" data-dismiss-toast>${esc(state.status)}</div>` : ""}
+          ${state.status && state.statusTone === "bad" ? `<div class="td-overlay-toast td-overlay-toast--bad" data-dismiss-toast>${esc(state.status)}</div>` : ""}
           <div class="td-overlay-head">
+            <button type="button" data-dashboard-link class="td-overlay-wordmark">Dashboard</button>
             <button class="td-overlay-balance" type="button" data-open-balance aria-label="Open balance editor" style="display:flex;align-items:center;gap:5px">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path fill-rule="evenodd" clip-rule="evenodd" d="M2.44955 6.75999H12.0395C12.1595 6.75999 12.2695 6.80999 12.3595 6.89999L13.8795 8.45999C14.1595 8.74999 13.9595 9.23999 13.5595 9.23999H3.96955C3.84955 9.23999 3.73955 9.18999 3.64955 9.09999L2.12955 7.53999C1.84955 7.24999 2.04955 6.75999 2.44955 6.75999ZM2.12955 4.68999L3.64955 3.12999C3.72955 3.03999 3.84955 2.98999 3.96955 2.98999H13.5495C13.9495 2.98999 14.1495 3.47999 13.8695 3.76999L12.3595 5.32999C12.2795 5.41999 12.1595 5.46999 12.0395 5.46999H2.44955C2.04955 5.46999 1.84955 4.97999 2.12955 4.68999ZM13.8695 11.3L12.3495 12.86C12.2595 12.95 12.1495 13 12.0295 13H2.44955C2.04955 13 1.84955 12.51 2.12955 12.22L3.64955 10.66C3.72955 10.57 3.84955 10.52 3.96955 10.52H13.5495C13.9495 10.52 14.1495 11.01 13.8695 11.3Z" fill="url(#solG)"/><defs><linearGradient id="solG" x1="1.77756" y1="13.3327" x2="13.9679" y2="1.14234" gradientUnits="userSpaceOnUse"><stop stop-color="#9945FF"/><stop offset="0.24" stop-color="#8752F3"/><stop offset="0.465" stop-color="#5497D5"/><stop offset="0.6" stop-color="#43B4CA"/><stop offset="0.735" stop-color="#28E0B9"/><stop offset="1" stop-color="#19FB9B"/></linearGradient></defs></svg>
               ${solBalanceLabel}
               <span class="td-overlay-balance-tip">Add more SOL</span>
             </button>
-            <button type="button" data-dashboard-link class="td-overlay-wordmark" title="Go to dashboard">POSTURE</button>
             <div class="td-overlay-head-actions">
               <button class="td-overlay-icon-btn td-overlay-icon-btn-pos${state.posNavOpen ? " is-active" : ""}${!state.posNavOpen && hasOpenPositions ? " is-live" : ""}" type="button" data-pos-toggle aria-label="Toggle live trades" style="width:20px;height:20px">${listIcon}</button>
               <button class="td-overlay-icon-btn td-overlay-icon-btn-settings${state.settingsOpen ? " is-active" : ""}" type="button" data-open-settings aria-label="Account settings">${personIcon}</button>
@@ -1522,30 +1566,51 @@
               ${state.settingsOpen ? `
                 <div class="td-overlay-label">Settings</div>
                 <div style="background:var(--td-card-bg);border:1px solid var(--td-card-border);border-radius:7px;overflow:hidden;margin-bottom:4px">
-                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--td-border-subtle)" data-toggle-advanced>
-                    <div>
-                      <div style="font-size:12px;font-weight:500;color:var(--td-text)">Advanced trading</div>
-                      <div style="font-size:10px;color:var(--td-text-faint);margin-top:1px">Stop loss &amp; target sell</div>
-                    </div>
-                    <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:${state.advancedTrading ? "#4ade80" : "var(--td-text-faint)"}">${state.advancedTrading ? "ON" : "OFF"}</span>
+                  <div style="padding:6px 10px 4px;font-size:10px;color:var(--td-text-faint);text-transform:uppercase;letter-spacing:0.07em;font-weight:600">Features</div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--td-border-subtle)">
+                    <div style="font-size:12px;font-weight:500;color:var(--td-text)">Stop loss &amp; target</div>
+                    <label class="td-toggle">
+                      <input type="checkbox" ${state.stopLossEnabled ? "checked" : ""} data-toggle-stop-loss-cb>
+                      <span class="td-toggle-track"></span>
+                      <span class="td-toggle-thumb"></span>
+                    </label>
                   </div>
-${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-out style="font:inherit;padding:0;border:none;background:none;font-size:12px;color:var(--td-text-faint);cursor:pointer">Sign out</button></div>` : ""}
+                  <div style="padding:8px 10px;border-top:1px solid var(--td-border-subtle)">
+                    <div style="font-size:10px;color:var(--td-text-faint);text-transform:uppercase;letter-spacing:0.07em;font-weight:600;margin-bottom:6px">Simulation</div>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <span style="font-size:11px;color:var(--td-text-dim);white-space:nowrap">Slippage</span>
+                        <div style="display:flex;align-items:center;gap:4px">
+                          <input class="td-overlay-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" style="width:52px;padding:3px 6px;font-size:11px;text-align:right" placeholder="Auto" value="${state.simSettings.slippagePct != null ? state.simSettings.slippagePct : ""}" data-sim-slippage />
+                          <span style="font-size:11px;color:var(--td-text-faint)">%</span>
+                        </div>
+                      </div>
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <span style="font-size:11px;color:var(--td-text-dim);white-space:nowrap">Exec delay</span>
+                        <div style="display:flex;align-items:center;gap:4px">
+                          <input class="td-overlay-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" style="width:52px;padding:3px 6px;font-size:11px;text-align:right" placeholder="Auto" value="${state.simSettings.execDelayMs != null ? state.simSettings.execDelayMs : ""}" data-sim-delay />
+                          <span style="font-size:11px;color:var(--td-text-faint)">ms</span>
+                        </div>
+                      </div>
+                      <button type="button" data-sim-reset style="font:inherit;padding:0;border:none;background:none;font-size:11px;color:var(--td-text-faint);cursor:pointer;text-align:left;margin-top:1px">Reset to defaults</button>
+                    </div>
+                  </div>
+${state.user ? `<div style="padding:7px 10px;border-top:1px solid var(--td-border-subtle)"><button type="button" data-sign-out style="font:inherit;padding:0;border:none;background:none;font-size:12px;color:rgba(248,113,113,0.8);cursor:pointer">Sign out</button></div>` : ""}
                 </div>
               ` : ""}
-              ${state.posNavOpen ? `<div style="height:1px;background:var(--td-border-subtle);margin:2px 0 4px"></div>` : ""}
               ${currentPosition ? (() => {
                 const fullName = currentPosition.tokenFullName || dd.tokenFullName || "";
                 return `${fullName ? `<div class="td-overlay-pos-token-header"><span class="td-overlay-pos-token-fullname">${esc(fullName)}</span></div>` : ""}
-                ${posSummaryHtml}
-                ${automationControlsHtml}`;
+                ${posSummaryHtml}`;
               })() : ""}
+              ${state.settingsOpen ? `<div style="height:1px;background:var(--td-border-subtle);margin:2px 0 6px"></div>` : ""}
               <div class="td-overlay-label">Buy</div>
               <div class="td-overlay-preset-grid">
                 ${BUY_PRESETS.map(value => {
                   const totalRequired = Number((value + FEE_PER_TRADE).toFixed(4));
-                  const disabled = !tradeReady || state.virtualBalance < totalRequired;
+                  const disabled = !tradeReady || state.virtualBalance < totalRequired || state.tradeBusy;
                   const button = `<button class="td-overlay-preset" type="button" data-buy="${value}" ${disabled ? "disabled" : ""}>${value} SOL</button>`;
-                  return disabled
+                  return disabled && !state.tradeBusy
                     ? `<span class="td-overlay-disabled-hint" data-hint="${!tradeReady ? "Waiting for live coin data" : `Need ${totalRequired.toFixed(2)} SOL including fee`}">${button}</span>`
                     : button;
                 }).join("")}
@@ -1553,12 +1618,13 @@ ${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-ou
               <div class="td-overlay-label" style="margin-top:6px">Sell</div>
               <div class="td-overlay-sell-stack">
                 <div class="td-overlay-sell-grid">
-                  ${SELL_PRESETS.map(percent => `<button class="td-overlay-pill td-overlay-pill-sell" type="button" data-sell-percent="${percent}" ${currentPosition ? "" : "disabled"}>${percent}%</button>`).join("")}
+                  ${SELL_PRESETS.map(percent => `<button class="td-overlay-pill td-overlay-pill-sell" type="button" data-sell-percent="${percent}" ${currentPosition && !state.tradeBusy ? "" : "disabled"}>${percent}%</button>`).join("")}
                 </div>
                 <div class="td-overlay-sell-sub" style="justify-content:flex-end">
-                  <button class="td-overlay-sell-sub-btn" type="button" data-sell-init ${currentPosition ? "" : "disabled"}>Sell init.</button>
+                  <button class="td-overlay-sell-sub-btn" type="button" data-sell-init ${currentPosition && !state.tradeBusy ? "" : "disabled"}>Sell init.</button>
                 </div>
               </div>
+              ${automationControlsHtml}
             </div>
           `}
         </div>
@@ -1585,6 +1651,7 @@ ${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-ou
 
     root.querySelector("[data-pos-toggle]")?.addEventListener("click", () => {
       state.posNavOpen = !state.posNavOpen;
+      if (state.posNavOpen) state.settingsOpen = false;
       render();
     });
 
@@ -1605,6 +1672,7 @@ ${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-ou
       if (!state.user) return;
       e.stopPropagation();
       state.settingsOpen = !state.settingsOpen;
+      if (state.settingsOpen) state.posNavOpen = false;
       render();
     }));
 
@@ -1615,11 +1683,33 @@ ${state.user ? `<div style="padding:7px 10px"><button type="button" data-sign-ou
       render();
     });
 
-    root.querySelector("[data-toggle-advanced]")?.addEventListener("click", async () => {
-      state.advancedTrading = !state.advancedTrading;
-      await saveAdvancedTrading();
+    const simSlippageInput = root.querySelector("[data-sim-slippage]");
+    const simDelayInput = root.querySelector("[data-sim-delay]");
+    const persistSimSettings = async () => {
+      const slipRaw = simSlippageInput?.value.trim();
+      const delayRaw = simDelayInput?.value.trim();
+      const slipParsed = slipRaw === "" ? null : Number(slipRaw);
+      const delayParsed = delayRaw === "" ? null : Number(delayRaw);
+      state.simSettings = {
+        slippagePct: (slipParsed != null && Number.isFinite(slipParsed) && slipParsed >= 0) ? slipParsed : null,
+        execDelayMs: (delayParsed != null && Number.isFinite(delayParsed) && delayParsed >= 0) ? delayParsed : null,
+      };
+      await saveSimSettings();
+    };
+    simSlippageInput?.addEventListener("change", persistSimSettings);
+    simDelayInput?.addEventListener("change", persistSimSettings);
+    root.querySelector("[data-sim-reset]")?.addEventListener("click", async () => {
+      state.simSettings = { ...SIM_DEFAULTS };
+      await saveSimSettings();
       render();
     });
+
+    root.querySelector("[data-toggle-stop-loss-cb]")?.addEventListener("change", async (e) => {
+      state.stopLossEnabled = e.target.checked;
+      await saveFeatureToggles();
+      render();
+    });
+
 
 root.querySelector("[data-refresh]")?.addEventListener("click", () => {
       state.detected = detectPageSnapshot();
@@ -1653,25 +1743,31 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
       button.addEventListener("click", async () => {
         if (state.tradeBusy) return;
         state.tradeBusy = true;
+        state.tradeStatus = "buying";
+        render();
         try {
           const size = Number(button.dataset.buy || 0);
           const totalRequired = Number((size + FEE_PER_TRADE).toFixed(4));
           if (state.virtualBalance < totalRequired) {
             throw new Error(`Need ${totalRequired.toFixed(2)} SOL to cover size and fee.`);
           }
+
+          setStatus("Executing...", "neutral");
+          await simulateExecDelay();
+
+          // Re-capture MC after delay — price may have moved during execution
           const rawSnapshot = detectPageSnapshot();
           const dex = state.dexData?.pairAddress === (rawSnapshot.pairAddress || state.dexData?.pairAddress) ? state.dexData : null;
-          // Use live MC (DexScreener+WS) for entry capture — same source as the overlay's live display.
-          // DOM MC is used only as last resort since Axiom's DOM can show stale data on page load.
           const liveMCForEntry = getEstimatedLiveMarketCapUsd();
+          const rawMC = liveMCForEntry || dex?.marketCapUsd || rawSnapshot.marketCap || null;
           const snapshot = {
             ...rawSnapshot,
             tokenName: dex?.symbol || rawSnapshot.tokenName,
             tokenFullName: dex?.name || rawSnapshot.tokenFullName || null,
             contractAddress: dex?.contractAddress || rawSnapshot.contractAddress || "",
             pairAddress: dex?.pairAddress || rawSnapshot.pairAddress || "",
-            marketCap: liveMCForEntry || dex?.marketCapUsd || rawSnapshot.marketCap || null,
-            marketCapSource: liveMCForEntry ? "live-mc" : (rawSnapshot.marketCap ? rawSnapshot.marketCapSource : (dex ? "dex-seed" : rawSnapshot.marketCapSource)),
+            marketCap: rawMC ? rawMC * getSlippageMultiplier(size, "buy") : null,
+            marketCapSource: liveMCForEntry ? "live-mc+slippage" : (rawSnapshot.marketCap ? rawSnapshot.marketCapSource : (dex ? "dex-seed" : rawSnapshot.marketCapSource)),
           };
           state.detected = snapshot;
           sentryCrumb("trade", "BUY attempted", { token: snapshot.tokenName, ca: snapshot.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, size });
@@ -1706,6 +1802,7 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
           setStatus(error.message || "Could not open live trade.", "bad");
         } finally {
           state.tradeBusy = false;
+          state.tradeStatus = null;
           render();
         }
       });
@@ -1785,15 +1882,29 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
     const current = getCurrentPosition();
     if (!current || !state.user) return;
 
+    const isManual = !options.trigger || options.trigger === "manual";
     state.tradeBusy = true;
+    state.tradeStatus = "selling";
+    render();
     sentryCrumb("trade", "SELL attempted", { token: current.tokenName, ca: current.contractAddress, fraction, trigger: options.trigger || "manual" });
     try {
-      const snapshot = resolveSnapshotForClose(current, options.snapshot || null);
+      if (isManual) {
+        setStatus("Executing...", "neutral");
+        await simulateExecDelay();
+      }
+
+      // For manual sells: re-capture MC after delay (price moved during execution).
+      // For auto-exit: use provided snapshot (already the trigger-time MC).
+      const rawSnapshot = resolveSnapshotForClose(current, isManual ? null : (options.snapshot || null));
+      const positionSizeSol = Number(current.positionSizeSol || 0) * fraction;
+      const fillMC = rawSnapshot.marketCap
+        ? rawSnapshot.marketCap * getSlippageMultiplier(positionSizeSol, "sell")
+        : null;
+      const snapshot = { ...rawSnapshot, marketCap: fillMC };
       state.detected = snapshot;
       if (!snapshot.marketCap) {
         throw new Error("Live market cap is not available, so the trade could not be closed safely.");
       }
-      const positionSizeSol = Number(current.positionSizeSol || 0) * fraction;
       const pnlPercentage = ((snapshot.marketCap / current.entryMarketCap) - 1) * 100;
       // pnlSol includes exit fee so displayed P&L reflects true cost
       const pnlSol = positionSizeSol * (pnlPercentage / 100) - FEE_PER_TRADE;
@@ -1883,16 +1994,13 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
         });
       }
       debugLog("SELL", { token: current.tokenName, ca: current.contractAddress, mc: snapshot.marketCap, mcSource: snapshot.marketCapSource, sizeSol: positionSizeSol, pnlSol, fraction, trigger: options.trigger || "manual", openTradeId: current.backendTradeId });
-      if (options.trigger === "stop_loss" || options.trigger === "target_sell") {
-        setStatus(options.trigger === "stop_loss" ? "Stop loss hit." : "Target hit.", "neutral");
-      } else {
-        setStatus("", "neutral");
-      }
+      setStatus("", "neutral");
     } catch (error) {
       sentryError(error, { action: "sell", token: current.tokenName, ca: current.contractAddress, fraction, trigger: options.trigger || "manual", mc: state.detected?.marketCap, mcSource: state.detected?.marketCapSource });
       setStatus(error.message || "Could not close live trade.", "bad");
     } finally {
       state.tradeBusy = false;
+      state.tradeStatus = null;
       render();
     }
   }
@@ -1926,7 +2034,7 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
       });
     }
 
-    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, VIRTUAL_BALANCE_KEY, BG_PRICE_KEY, OVERLAY_DARK_THEME_KEY, ADVANCED_TRADING_KEY]);
+    const stored = await storage.get(["td_session", OPEN_POSITIONS_KEY, EXTENSION_ENABLED_KEY, FORCE_OVERLAY_KEY, OVERLAY_POSITION_KEY, VIRTUAL_BALANCE_KEY, BG_PRICE_KEY, OVERLAY_DARK_THEME_KEY, STOP_LOSS_ENABLED_KEY, TARGET_SELL_ENABLED_KEY, SIMULATION_SETTINGS_KEY]);
     state.session = stored.td_session || null;
     state.openPositions = stored[OPEN_POSITIONS_KEY] || {};
     state.enabled = stored[EXTENSION_ENABLED_KEY] !== false;
@@ -1935,7 +2043,8 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
     state.virtualBalance = Number(stored[VIRTUAL_BALANCE_KEY] || 0);
     state.bgPrice = stored[BG_PRICE_KEY] || null;
     state.darkTheme = stored[OVERLAY_DARK_THEME_KEY] !== false;
-    state.advancedTrading = stored[ADVANCED_TRADING_KEY] === true;
+    state.stopLossEnabled = stored[STOP_LOSS_ENABLED_KEY] === true;
+    state.simSettings = stored[SIMULATION_SETTINGS_KEY] || { ...SIM_DEFAULTS };
     state.detected = detectPageSnapshot();
 
     if (state.session?.access_token) {
@@ -2098,6 +2207,17 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
     window.addEventListener("load", handleRouteSignal, { once: true });
     window.setInterval(refreshPageSnapshot, 450);
 
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      storage.get([VIRTUAL_BALANCE_KEY]).then(stored => {
+        const fresh = Number(stored[VIRTUAL_BALANCE_KEY] || 0);
+        if (fresh !== state.virtualBalance) {
+          state.virtualBalance = fresh;
+          renderUnlessEditing();
+        }
+      }).catch(() => {});
+    });
+
     chrome.storage.onChanged.addListener(changes => {
       if (changes[EXTENSION_ENABLED_KEY]) {
         state.enabled = changes[EXTENSION_ENABLED_KEY].newValue !== false;
@@ -2124,8 +2244,12 @@ root.querySelector("[data-refresh]")?.addEventListener("click", () => {
         state.darkTheme = changes[OVERLAY_DARK_THEME_KEY].newValue !== false;
         renderUnlessEditing();
       }
-if (changes[ADVANCED_TRADING_KEY]) {
-        state.advancedTrading = changes[ADVANCED_TRADING_KEY].newValue === true;
+      if (changes[STOP_LOSS_ENABLED_KEY]) {
+        state.stopLossEnabled = changes[STOP_LOSS_ENABLED_KEY].newValue === true;
+        renderUnlessEditing();
+      }
+      if (changes[SIMULATION_SETTINGS_KEY]) {
+        state.simSettings = changes[SIMULATION_SETTINGS_KEY].newValue || { ...SIM_DEFAULTS };
         renderUnlessEditing();
       }
       if (changes["td_session"]) {

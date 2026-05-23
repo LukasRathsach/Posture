@@ -50,11 +50,15 @@
 
 .td-overlay-shell {
   background: var(--td-bg);
-  border: 1px solid var(--td-border);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: var(--td-shell-shadow);
   box-sizing: border-box;
+}
+
+.is-light .td-overlay-shell {
+  border-color: rgba(0, 0, 0, 0.18);
 }
 
 .td-overlay-toast {
@@ -62,6 +66,7 @@
   font-size: 11px;
   font-weight: 500;
   border-bottom: 1px solid var(--td-border-subtle);
+  border-radius: 8px 8px 0 0;
   cursor: pointer;
   user-select: none;
   line-height: 1.4;
@@ -86,22 +91,30 @@
 }
 
 .td-overlay-wordmark {
+  position: relative;
   font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--td-text-faint);
-  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--td-text-dim);
+  background: transparent;
   border: none;
   cursor: pointer;
-  padding: 0;
-  transition: color 140ms ease;
+  padding: 3px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
+  transition: color 140ms ease, background 120ms ease;
+  justify-self: start;
 }
 
 .td-overlay-wordmark:hover {
   color: var(--td-text);
+  background: rgba(255, 255, 255, 0.07);
 }
+
+.is-light .td-overlay-wordmark:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
 
 .td-overlay-head-actions {
   display: flex;
@@ -133,6 +146,45 @@
   background: var(--td-card-bg-hover);
   border-color: var(--td-card-border-strong);
   color: var(--td-text-mid);
+}
+
+.td-toggle {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.td-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.td-toggle-track {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.12);
+  transition: background 160ms ease;
+  cursor: pointer;
+}
+.td-toggle input:checked ~ .td-toggle-track {
+  background: rgba(80, 255, 108, 0.35);
+}
+.td-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  pointer-events: none;
+  transition: transform 160ms ease;
+}
+.td-toggle input:checked ~ .td-toggle-thumb {
+  transform: translateX(12px);
 }
 
 .td-overlay-balance,
@@ -168,15 +220,17 @@
 
 .td-overlay-balance-tip {
   position: absolute;
-  top: calc(100% + 6px);
+  bottom: calc(100% + 6px);
   left: 50%;
-  transform: translateX(-50%) translateY(-2px);
+  transform: translateX(-50%) translateY(2px);
   background: var(--td-bg);
   border: 1px solid var(--td-border-subtle);
   border-radius: 5px;
   color: var(--td-text-dim);
   font-size: 11px;
   font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
   line-height: 1.2;
   padding: 4px 8px;
   white-space: nowrap;
@@ -187,6 +241,11 @@
 }
 
 .td-overlay-balance:hover .td-overlay-balance-tip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.td-overlay-wordmark:hover .td-overlay-balance-tip {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }

@@ -17,7 +17,7 @@ This file exists so that a new AI assistant — with no memory of prior sessions
 
 **Do add to this file** any time you make a non-obvious architectural decision, discover a fragile dependency, change the data model, or learn something about how the user wants to work. Update in the same task, not at the end of the session.
 
-Last updated: 2026-05-23
+Last updated: 2026-05-23 (session 2)
 
 ---
 
@@ -353,6 +353,8 @@ For dashboard live positions, prefer the extension's in-memory/chrome-storage op
 
 The dashboard requests balance on load and on tab focus. `td_virtual_balance` is the single source of truth — never trust only `localStorage`.
 
+**Race condition guard (added 2026-05-23):** App.jsx tracks `lastLocalBalanceEdit` timestamp. `onInjectBalance` ignores incoming values for 2s after a local edit — prevents `request_balance`-on-focus from reading stale chrome.storage and overwriting a freshly edited balance. overlay.js re-reads `VIRTUAL_BALANCE_KEY` from storage on `visibilitychange` to catch updates missed while the tab was backgrounded.
+
 ---
 
 ## Dashboard architecture
@@ -375,15 +377,18 @@ The dashboard requests balance on load and on tab focus. `td_virtual_balance` is
 
 **Header:** 3-column grid
 ```
-[positions-toggle  stats-icon]  [SOL-logo  balance]  [gear-icon]
+[Dashboard wordmark]  [SOL-logo  balance]  [positions-toggle  gear-icon]
 ```
 
-- **Gear icon:** opens a floating popup (position: absolute) — not inline. Clicking outside closes it. Contains: theme toggle, virtual balance link, advanced trading toggle, sign out. Do not make this inline again.
+- **Gear icon:** opens a floating popup (position: absolute) — not inline. Clicking outside closes it. Contains: "Features" section (Stop loss & target toggle), Simulation section (slippage %, exec delay ms, reset), sign out (red). Do not make this inline again.
 - **Gear icon CSS gotcha:** base `.td-overlay-icon-btn svg` applies `fill: none; stroke: currentColor`. The gear uses a fill-based SVG. Override on `.td-overlay-icon-btn-settings svg`: `fill: currentColor; stroke: none; stroke-width: 0`.
 - **Icon active/live states:** `.td-overlay-icon-btn.is-active` → white color + white drop-shadow glow. `.td-overlay-icon-btn.is-live` → slow breathing white glow animation (2.6s). The positions toggle gets `is-live` when `hasOpenPositions && !posNavOpen`. Defined in `overlay.css` with `@keyframes td-icon-breathe`.
 - **Drag:** uses `setPointerCapture` so pointer events are retained when moving fast over Axiom's page content. `renderUnlessEditing` skips re-renders while `dragState !== null`. The global `pointerup → schedulePageRefresh` listener is also gated on `!dragState`.
-- **Position summary** (Invested / Sold / Remaining / P/L): always visible when a position is open. Not gated.
-- **Stop loss / target sell inputs:** only shown when `state.advancedTrading === true`.
+- **Position summary row 1** (Invested / Sold / Remaining / PnL): always visible when a position is open; 4-column CSS grid.
+- **Position summary row 2** (Stop loss / Target sell): only shown when `state.stopLossEnabled === true` AND at least one value is set. Appears immediately below row 1.
+- **Stop loss / target sell inputs:** shown below the Sell section (not above Buy). `stopLossEnabled` is a single toggle for both features. Stop loss stored as negative number (e.g. `-20`); displayed as `-20.0%`. Input placeholder: `"e.g. -20"`. `normalizeStopLossPct` accepts both `-20` and `20` and always stores negative.
+- **Toast bar:** only shows for errors (`statusTone === "bad"`). All neutral/good toasts (stop loss hit, target hit, save confirmation) are silent — no toast shown.
+- **Tooltips:** `.td-overlay-shell` is `overflow: visible`; toast gets `border-radius: 8px 8px 0 0` to maintain rounded corners. All tooltips (disabled-hint, balance-tip) can now escape the shell box.
 - **Balance tooltip** ("Add more SOL"): appears **above** the balance, not below. `bottom: calc(100% + 7px)`.
 
 ---
@@ -425,25 +430,41 @@ When a localhost dashboard tab is already open, the extension prefers it over pr
 
 ---
 
-### Phase 1 — Current focus (extension polish + reliability)
+### Phase 1 — Current focus (polish extension til det er næsten perfekt)
 
-Run these in parallel — polish without reliability is worthless.
+The bar is: every interaction feels instant and correct, nothing fails silently, and the UI gets out of the way. Done when a real trader can use it for a full session without second-guessing whether their trade was recorded.
 
-**Extension UI polish**
-- [ ] Tighten the buy/sell panel: reduce padding, slim inputs, sharper layout
-- [ ] Position row: make live P/L the dominant visual element; token name and entry details subordinate
-- [ ] Stop loss / target sell controls: move behind "Advanced" collapsible — keep the main view clean
-- [ ] Sell buttons: clearer visual hierarchy between "Sell 25%" / "Sell 50%" / "Sell 100%"
-- [ ] Balance display: compact, always accurate
+**Trade execution — never fails, always correct**
+- [ ] Every buy/sell shows immediate visual feedback (success flash or error message) — no silent failures
+- [ ] Buy with insufficient balance shows clear inline error, not a silent no-op
+- [ ] Sell queue flush must retry on reconnect AND on extension restart (currently only on storage event)
+- [ ] Dead-lettered close-queue entries should surface as a visible warning in the overlay
+- [ ] Stop loss and target sell fire reliably when tab is backgrounded — verify `td_bg_price` alarm path end-to-end
 
-**Reliability**
-- [ ] Every buy/sell/close must show clear, immediate feedback in the overlay — no silent failures
-- [ ] Stop loss and target sell always fire reliably in all auto-exit scenarios
-- [ ] Consistent extension ↔ dashboard sync — cover edge cases (reload, new tab, extension restart, offline flush)
-- [ ] Contract address (CA) visible everywhere and synced — first-class field in open-note payload
-- [x] P&L accuracy: entry MC now uses live DexScreener+WS source instead of DOM-scraped MC — done 2026-05-23
-- [x] Fee-inclusive P&L: `totalFeesSol` tracked on position, deducted from live and displayed P&L — done 2026-05-23
-- [x] P&L reset on rebuy: fresh buy (positionSizeSol=0) now correctly zeroes realizedPnl and fees — done 2026-05-23
+**P&L and data accuracy**
+- [x] Entry MC from live DexScreener+WS source — done 2026-05-23
+- [x] Fee-inclusive P&L (`totalFeesSol` tracked, deducted from display) — done 2026-05-23
+- [x] P&L reset on fresh rebuy — done 2026-05-23
+- [ ] Partial sell P&L: confirm realized + unrealized combined display is correct after multiple partial exits
+- [ ] Position persists across Axiom page navigations (same tab, new coin) — open position must not vanish
+
+**Extension ↔ dashboard sync**
+- [ ] Open positions visible in dashboard immediately after a buy — no manual reload required
+- [ ] Closing a position in overlay removes it from dashboard open-positions list in real time
+- [x] Balance race condition fixed — done 2026-05-23: `lastLocalBalanceEdit` guard in App.jsx prevents stale `request_balance` responses from overwriting a freshly edited balance; overlay.js re-reads from chrome.storage on `visibilitychange`
+
+**UI — sharp, nothing in the way**
+- [ ] Buy/sell panel: tighter padding, slimmer inputs
+- [ ] Position row: live P&L is the dominant element; entry MC and size are secondary
+- [ ] Sell buttons: clear visual hierarchy (25% / 50% / 100%)
+- [ ] Token name always resolved — never shows raw contract address as display name
+
+**Axiom compatibility — fragile, must be watched**
+- [ ] MC capture: verify `detectVisibleMarketCapFromPage()` selector still matches current Axiom DOM
+- [ ] Token detection: verify `findAxiomPairInfoFromNextData()` still extracts ticker + full name correctly
+- [ ] Add a visible "No live data" indicator when MC cannot be resolved (instead of silently disabling buy)
+
+**Done**
 - [x] WebSocket hook extracted to `extension/socket-hook.js` content script (MAIN world) — done 2026-05-23
 - [x] Debug logging always-on, full opacity overlay — done 2026-05-23
 
