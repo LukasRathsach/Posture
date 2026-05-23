@@ -17,7 +17,7 @@ This file exists so that a new AI assistant — with no memory of prior sessions
 
 **Do add to this file** any time you make a non-obvious architectural decision, discover a fragile dependency, change the data model, or learn something about how the user wants to work. Update in the same task, not at the end of the session.
 
-Last updated: 2026-05-15
+Last updated: 2026-05-23
 
 ---
 
@@ -441,6 +441,11 @@ Run these in parallel — polish without reliability is worthless.
 - [ ] Stop loss and target sell always fire reliably in all auto-exit scenarios
 - [ ] Consistent extension ↔ dashboard sync — cover edge cases (reload, new tab, extension restart, offline flush)
 - [ ] Contract address (CA) visible everywhere and synced — first-class field in open-note payload
+- [x] P&L accuracy: entry MC now uses live DexScreener+WS source instead of DOM-scraped MC — done 2026-05-23
+- [x] Fee-inclusive P&L: `totalFeesSol` tracked on position, deducted from live and displayed P&L — done 2026-05-23
+- [x] P&L reset on rebuy: fresh buy (positionSizeSol=0) now correctly zeroes realizedPnl and fees — done 2026-05-23
+- [x] WebSocket hook extracted to `extension/socket-hook.js` content script (MAIN world) — done 2026-05-23
+- [x] Debug logging always-on, full opacity overlay — done 2026-05-23
 
 ---
 
